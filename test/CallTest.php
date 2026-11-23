@@ -21,6 +21,7 @@ use Mercurius\ClaudeCode\Relay;
 use Mercurius\ClaudeCode\Server;
 use Psr\Log\NullLogger;
 
+use function Amp\async;
 use function Amp\ByteStream\buffer;
 use function Amp\delay;
 
@@ -68,7 +69,8 @@ final class CallTest extends AsyncTestCase {
         @rmdir($dir);
     }
 
-    private function server(float $idle = 30.0): Server {
+    /** @param positive-int $concurrent */
+    private function server(float $idle = 30.0, int $concurrent = 4, float $queue = 30.0): Server {
         $api = SocketHttpServer::createForDirectAccess(new NullLogger(), enableCompression: false);
         $api->expose(new InternetAddress('127.0.0.1', 0));
         $api->start(new ClosureRequestHandler(function (Request $request): Response {
@@ -90,7 +92,7 @@ final class CallTest extends AsyncTestCase {
         }
         $cli = new ClaudeCli([PHP_BINARY, __DIR__ . '/fixtures/fake-claude.php'], new ChildEnv($base, $this->dir), '2.1.321');
         $this->relay = new Relay(new NullLogger(), 'http://' . $api->getServers()[0]->getAddress()->toString(), 10.0);
-        $calls = new ModelCall($cli, $this->relay, $this->dir . '/tmp', $this->dir . '/work', new NullLogger(), $idle);
+        $calls = new ModelCall($cli, $this->relay, $this->dir . '/tmp', $this->dir . '/work', new NullLogger(), $idle, $concurrent, $queue);
         return new Server($cli, new Login($cli), $calls, self::TOKEN, new NullLogger());
     }
 
@@ -396,6 +398,34 @@ final class CallTest extends AsyncTestCase {
         self::assertSame(504, $silent->getStatus());
         self::assertSame('timeout_error', self::error($silent)['type']);
         self::assertSame([], $this->seen);
+    }
+
+    public function testCallsWaitForAPlaceAndACallThatWaitedTooLongIsRefused(): void {
+        $server = $this->server(30.0, 1, 0.4);
+        file_put_contents($this->dir . '/mode', 'slow');
+        $this->script = [['status' => 200, 'body' => self::sse(self::text('First'))], ['status' => 200, 'body' => self::sse(self::text('Third'))]];
+        $body = ['model' => 'sonnet', 'messages' => [['role' => 'user', 'content' => 'Hi']]];
+
+        // the answer of the CLI about its sign-in is taken once, so both calls go straight for a place
+        $server->respond(new Request($this->createMock(Client::class), 'GET', Http::new('http://claude-code/auth/status'), ['x-api-key' => self::TOKEN]));
+        $first = async(fn(): Response => $this->call($server, $body));
+        delay(0.1);
+        $second = $this->call($server, $body);
+
+        self::assertSame(529, $second->getStatus());
+        self::assertSame('overloaded_error', self::error($second)['type']);
+        $answered = $first->await();
+        self::assertInstanceOf(Response::class, $answered);
+        self::assertSame('First', self::firstText($answered));
+        self::assertCount(1, $this->seen, 'the refused call sent nothing');
+
+        // the place is free when the process of the first call is gone
+        $third = $this->call($server, $body);
+        for ($i = 0; $i < 50 && $third->getStatus() === 529; $i++) {
+            delay(0.1);
+            $third = $this->call($server, $body);
+        }
+        self::assertSame('Third', self::firstText($third));
     }
 
     public function testTheModelsTheServiceKnowsAreListed(): void {

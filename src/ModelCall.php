@@ -7,6 +7,8 @@ namespace Mercurius\ClaudeCode;
 use Amp\ByteStream\ReadableStream;
 use Amp\Cancellation;
 use Amp\CancelledException;
+use Amp\CompositeCancellation;
+use Amp\DeferredFuture;
 use Amp\Future;
 use Amp\Pipeline\Queue;
 use Amp\Process\Process;
@@ -46,6 +48,10 @@ use function Amp\File\write;
  * ref: references/hermes-official-plugins/claude-subscription-directsdk/directsdk.py@269ddcb:L476-L622
  *      (_fast_eligible, _hand_off) — the answer does not wait for the CLI to exit; the CLI gets ten seconds and is
  *      killed. Here the answer goes on as the API streams it, so there is no check of the CLI's result first
+ * ref: references/hermes-official-plugins/claude-subscription-directsdk/concurrency.py@269ddcb:L1-L114 — a process
+ *      of the CLI takes a quarter of a gigabyte, so calls wait in the order they came for one of a few places; a
+ *      place is held until the process is gone; a call that waited too long or was cancelled never starts late.
+ *      There is one limit, not a limit per profile, and no heartbeat: the application waits on the connection
  */
 final class ModelCall {
     private const NATIVE_STATUS = ['rate_limit' => 429, 'billing_error' => 402, 'authentication_failed' => 401, 'overloaded' => 529, 'server_error' => 503];
@@ -53,10 +59,17 @@ final class ModelCall {
     private const REAP_SECONDS = 10.0;
     private const STDERR_BYTES = 400;
 
+    /** the processes of the CLI running now */
+    private int $held = 0;
+    /** @var list<DeferredFuture<mixed>> the calls that wait for a place, in the order they came */
+    private array $waiting = [];
+
     /**
      * @param non-empty-string $tmpDir where the files of a request live for the time of the call
      * @param non-empty-string $workDir the folder the CLI runs in: empty, the same for every call
      * @param float $idleSeconds how long the CLI may print nothing before the call is given up
+     * @param positive-int $maxConcurrent how many processes of the CLI run at once
+     * @param float $queueSeconds how long a call waits for a place before it is refused
      */
     public function __construct(
         private readonly ClaudeCli $cli,
@@ -65,6 +78,8 @@ final class ModelCall {
         private readonly string $workDir,
         private readonly LoggerInterface $logger,
         private readonly float $idleSeconds = 300.0,
+        private readonly int $maxConcurrent = 4,
+        private readonly float $queueSeconds = 300.0,
     ) {}
 
     /**
@@ -73,6 +88,65 @@ final class ModelCall {
      * @throws CancelledException
      */
     public function run(MessagesRequest $request, #[\SensitiveParameter] ?string $oauthToken, Cancellation $cancellation): Answer {
+        try {
+            $this->take(new CompositeCancellation($cancellation, new TimeoutCancellation($this->queueSeconds)));
+        } catch (CancelledException $e) {
+            if ($cancellation->isRequested()) {
+                throw $e;
+            }
+            throw new CallFailed(529, 'overloaded_error', sprintf('All %d places for Claude Code were busy for %d s', $this->maxConcurrent, (int) $this->queueSeconds));
+        }
+        $held = true;
+        $free = function () use (&$held): void {
+            if ($held) {
+                $held = false;
+                $this->give();
+            }
+        };
+        try {
+            return $this->start($request, $oauthToken, $cancellation, $free);
+        } catch (\Throwable $e) {
+            // the call did not start, or failed before its answer: the place is free at once
+            $free();
+            throw $e;
+        }
+    }
+
+    /** Waits for a place among the processes of the CLI, in the order the calls came. */
+    private function take(Cancellation $cancellation): void {
+        if ($this->held < $this->maxConcurrent) {
+            $this->held++;
+            return;
+        }
+        $turn = new DeferredFuture();
+        $this->waiting[] = $turn;
+        try {
+            $turn->getFuture()->await($cancellation);
+        } catch (CancelledException $e) {
+            $this->waiting = array_values(array_filter($this->waiting, static fn(DeferredFuture $other): bool => $other !== $turn));
+            if ($turn->isComplete()) {
+                // the place came at the moment the call gave up: it goes on to the next, a late call never starts
+                $this->give();
+            }
+            throw $e;
+        }
+    }
+
+    private function give(): void {
+        $next = array_shift($this->waiting);
+        if ($next === null) {
+            $this->held--;
+        } else {
+            $next->complete();
+        }
+    }
+
+    /**
+     * @param \Closure(): void $free gives back the place of the call: held until its process is gone
+     * @throws CallFailed
+     * @throws CancelledException
+     */
+    private function start(MessagesRequest $request, #[\SensitiveParameter] ?string $oauthToken, Cancellation $cancellation, \Closure $free): Answer {
         $admission = new Admission($request->names);
         $relay = $this->relay->admit($admission);
         $dir = $this->tmpDir . '/claude-code-' . bin2hex(random_bytes(8));
@@ -123,10 +197,11 @@ final class ModelCall {
         // the application may go away at any moment of the call, also in the middle of an answer: the CLI is stopped,
         // and with it the permit and the request to the API — nothing is paid for an answer nobody reads
         $subscription = $cancellation->subscribe(static fn() => self::kill($process));
-        $drive = async(function () use ($process, $request, $outcome, $admission, $dir, $cancellation, $subscription): bool {
+        $drive = async(function () use ($process, $request, $outcome, $admission, $dir, $cancellation, $subscription, $free): bool {
             try {
                 $this->drive($process, $request, $outcome);
             } finally {
+                $free();
                 $cancellation->unsubscribe($subscription);
                 $this->relay->release($admission);
                 $this->remove($dir);

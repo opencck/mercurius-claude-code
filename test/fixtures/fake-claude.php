@@ -109,6 +109,9 @@ if (in_array('-p', $args, true)) {
     if ($mode === 'silent') {
         sleep(60);
     }
+    if ($mode === 'slow') {
+        usleep(1_500_000);
+    }
     $post = static function (object $body) use ($emit): int {
         $context = stream_context_create(['http' => [
             'method' => 'POST',

@@ -6,7 +6,8 @@ declare(strict_types=1);
 /**
  * The claude-code service: CLAUDE_CODE_TOKEN (required, 16+ characters), CLAUDE_CODE_PORT (8094),
  * CLAUDE_CODE_HOST (0.0.0.0), CLAUDE_CODE_COMMAND (claude), CLAUDE_CONFIG_DIR (/data/claude — where the CLI keeps its
- * sign-in), CLAUDE_CODE_MIN_VERSION (2.1.321), CLAUDE_CODE_IDLE_SECONDS (300 — how long a call may be silent).
+ * sign-in), CLAUDE_CODE_MIN_VERSION (2.1.321), CLAUDE_CODE_IDLE_SECONDS (300 — how long a call may be silent),
+ * CLAUDE_CODE_MAX_CONCURRENT (4 — how many processes of the CLI run at once; a call waits for a place).
  */
 
 use Mercurius\ClaudeCode\ChildEnv;
@@ -69,7 +70,8 @@ foreach (glob($tmp . '/claude-code-*', GLOB_ONLYDIR) ?: [] as $stale) {
         @rmdir($stale);
     }
 }
-$calls = new ModelCall($cli, $relay, $tmp, $tmp . '/claude-code-work', $logger, $idle);
+$concurrent = max(1, min(32, (int) (getenv('CLAUDE_CODE_MAX_CONCURRENT') ?: 4)));
+$calls = new ModelCall($cli, $relay, $tmp, $tmp . '/claude-code-work', $logger, $idle, $concurrent, $idle);
 $server = (new Server($cli, new Login($cli), $calls, $token, $logger))->start($host, max(1, min(65535, $port)));
 fwrite(STDERR, sprintf("claude-code listening on %s:%d\n", $host, $port));
 trapSignal([2, 15]);

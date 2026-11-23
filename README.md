@@ -49,6 +49,7 @@ runs none of them.
 | `401` | nobody is signed in, or the CLI would bill an API key instead of the subscription |
 | `429`, `529` and other statuses of the API | as the API answered, with its body and `retry-after` |
 | `502` | the answer was cut, or the CLI ended without a request |
+| `529` | every place for the CLI stayed busy while the call waited |
 | `503` | the CLI is missing or too old |
 | `504` | the CLI was silent for too long |
 
@@ -65,7 +66,8 @@ does not count it as the subscription.
 | `CLAUDE_CONFIG_DIR` | `/data/claude` | where the CLI keeps its sign-in; a volume |
 | `CLAUDE_CODE_COMMAND` | `claude` | the CLI |
 | `CLAUDE_CODE_MIN_VERSION` | `2.1.321` | the oldest CLI the service works with |
-| `CLAUDE_CODE_IDLE_SECONDS` | `300` | how long the CLI may be silent in a call |
+| `CLAUDE_CODE_IDLE_SECONDS` | `300` | how long the CLI may be silent in a call, and how long a call waits for a place |
+| `CLAUDE_CODE_MAX_CONCURRENT` | `4` | how many processes of the CLI run at once (about 250 MB each); other calls wait in order |
 
 The service refuses to start when `ANTHROPIC_BASE_URL` or a Bedrock, Vertex or Foundry switch is set in its
 environment. `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` never reach the CLI.

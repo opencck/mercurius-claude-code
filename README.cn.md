@@ -44,6 +44,7 @@ MCP 服务器向 CLI 列出；服务不执行其中任何一个。
 | `401` | 无人登录，或 CLI 会按 API 密钥而非订阅计费 |
 | `429`、`529` 及 API 的其他状态码 | 与 API 的应答一致，带其响应体和 `retry-after` |
 | `502` | 应答被截断，或 CLI 未发出请求就结束 |
+| `529` | 调用等待期间，CLI 的所有空位一直被占用 |
 | `503` | 没有 CLI 或版本过旧 |
 | `504` | CLI 沉默过久 |
 
@@ -59,7 +60,8 @@ MCP 服务器向 CLI 列出；服务不执行其中任何一个。
 | `CLAUDE_CONFIG_DIR` | `/data/claude` | CLI 保存登录的位置；数据卷 |
 | `CLAUDE_CODE_COMMAND` | `claude` | CLI |
 | `CLAUDE_CODE_MIN_VERSION` | `2.1.321` | 服务可用的最低 CLI 版本 |
-| `CLAUDE_CODE_IDLE_SECONDS` | `300` | 一次调用中 CLI 可以沉默多久 |
+| `CLAUDE_CODE_IDLE_SECONDS` | `300` | 一次调用中 CLI 可以沉默多久，以及调用等待空位多久 |
+| `CLAUDE_CODE_MAX_CONCURRENT` | `4` | 同时运行多少个 CLI 进程（每个约 250 MB）；其余调用按顺序等待 |
 
 如果服务的环境中设置了 `ANTHROPIC_BASE_URL` 或 Bedrock、Vertex、Foundry 开关，服务拒绝启动。`ANTHROPIC_API_KEY` 和
 `ANTHROPIC_AUTH_TOKEN` 永远不会传给 CLI。
