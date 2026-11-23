@@ -7,7 +7,6 @@ namespace Mercurius\ClaudeCode;
 use Closure;
 use Generator;
 use stdClass;
-use Throwable;
 
 /**
  * The answer of the API to one call, started: either the events as they come, or the whole message at the end.
@@ -15,8 +14,6 @@ use Throwable;
  * spec: brief/models.md#claude-по-подписке
  */
 final class Answer {
-    /** @var \Amp\Pipeline\ConcurrentIterator<string> */
-    private readonly \Amp\Pipeline\ConcurrentIterator $frames;
     public readonly ?string $requestId;
 
     /**
@@ -27,7 +24,6 @@ final class Answer {
         private readonly Closure $finish,
     ) {
         $this->requestId = $admission->requestId;
-        $this->frames = $admission->frames->iterate();
     }
 
     /**
@@ -38,17 +34,11 @@ final class Answer {
      */
     public function stream(): Generator {
         try {
-            $cut = null;
-            try {
-                while ($this->frames->continue()) {
-                    yield $this->frames->getValue();
-                }
-                $cut = $this->admission->cut?->getMessage();
-            } catch (Throwable) {
-                $cut = 'The answer of the API was cut';
+            while (($frame = $this->admission->next()) !== null) {
+                yield $frame;
             }
-            if ($cut !== null) {
-                yield sprintf("event: error\ndata: %s\n\n", json_encode(['type' => 'error', 'error' => ['type' => 'api_error', 'message' => $cut]], MessagesRequest::JSON));
+            if ($this->admission->cut !== null) {
+                yield sprintf("event: error\ndata: %s\n\n", json_encode(['type' => 'error', 'error' => ['type' => 'api_error', 'message' => $this->admission->cut->getMessage()]], MessagesRequest::JSON));
             }
         } finally {
             ($this->finish)();
@@ -62,11 +52,9 @@ final class Answer {
      */
     public function message(): stdClass {
         try {
-            while ($this->frames->continue()) {
+            while ($this->admission->next() !== null) {
                 // the events are for a stream; here only the end matters
             }
-        } catch (Throwable) {
-            throw new CallFailed(502, 'api_error', 'The answer of the API was cut');
         } finally {
             ($this->finish)();
         }

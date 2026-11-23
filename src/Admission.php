@@ -7,7 +7,6 @@ namespace Mercurius\ClaudeCode;
 use Amp\DeferredCancellation;
 use Amp\DeferredFuture;
 use Amp\Future;
-use Amp\Pipeline\Queue;
 
 /**
  * The permit of one model call: Claude Code started for this call may send one request to the API, and what came
@@ -25,8 +24,11 @@ final class Admission {
     /** the secret part of the route: only the CLI of this call knows it */
     public readonly string $route;
     public readonly Capture $capture;
-    /** @var Queue<string> the events of the answer for the application */
-    public readonly Queue $frames;
+    /** @var list<string> the events of the answer the application has not taken yet */
+    private array $frames = [];
+    private bool $ended = false;
+    /** @var ?DeferredFuture<null> the application waits for the next event */
+    private ?DeferredFuture $waiting = null;
     public bool $used = false;
     public int $denied = 0;
     public ?int $status = null;
@@ -47,7 +49,6 @@ final class Admission {
     public function __construct(ToolNames $names) {
         $this->route = bin2hex(random_bytes(24));
         $this->capture = new Capture($names);
-        $this->frames = new Queue();
         $this->answering = new DeferredFuture();
         $this->cancellation = new DeferredCancellation();
     }
@@ -109,16 +110,43 @@ final class Admission {
         return $this->errorBody;
     }
 
-    /** The answer of the API ended: whole, or cut. */
-    public function ended(): void {
-        if ($this->frames->isComplete()) {
+    /** An event of the answer, for the application. */
+    public function push(string $frame): void {
+        if ($this->ended) {
             return;
         }
+        $this->frames[] = $frame;
+        $this->wake();
+    }
+
+    /**
+     * The next event of the answer; null — the answer ended. The events that came before the end are all given
+     * first: a cut answer loses nothing of what the API did send.
+     */
+    public function next(): ?string {
+        while ($this->frames === [] && !$this->ended) {
+            $this->waiting ??= new DeferredFuture();
+            $this->waiting->getFuture()->await();
+        }
+        return array_shift($this->frames);
+    }
+
+    /** The answer of the API ended: whole, or cut. */
+    public function ended(): void {
+        if ($this->ended) {
+            return;
+        }
+        $this->ended = true;
         if (!$this->capture->complete()) {
             $this->cut = new CallFailed(502, 'api_error', 'The answer of the API ended before it was complete' . ($this->failure === null ? '' : ' (' . $this->failure . ')'));
         }
-        // the events already taken stay in the queue for the application: an error of the queue would drop them
-        $this->frames->complete();
+        $this->wake();
+    }
+
+    private function wake(): void {
+        $waiting = $this->waiting;
+        $this->waiting = null;
+        $waiting?->complete();
     }
 
     /** The call is over: nothing more goes to the API by this permit, a request in flight is dropped. */

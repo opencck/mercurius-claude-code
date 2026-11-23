@@ -155,7 +155,7 @@ final class Relay {
                 while (($chunk = $response->getBody()->read($admission->cancellation())) !== null) {
                     if ($status === HttpStatus::OK) {
                         foreach ($admission->capture->feed($chunk) as $frame) {
-                            $admission->frames->pushAsync($frame)->ignore();
+                            $admission->push($frame);
                         }
                     } else {
                         $admission->error($chunk);

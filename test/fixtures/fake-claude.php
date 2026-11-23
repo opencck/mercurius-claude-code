@@ -7,7 +7,15 @@ declare(strict_types=1);
  * CLI (checked on 2.1.330). Its state is a file in CLAUDE_CONFIG_DIR; each run also writes the environment it got there.
  */
 
-$args = array_slice($argv, 1);
+$args = [];
+/** @var mixed $given */
+$given = $_SERVER['argv'] ?? null;
+/** @var mixed $arg */
+foreach (array_slice(is_array($given) ? $given : [], 1) as $arg) {
+    if (is_string($arg)) {
+        $args[] = $arg;
+    }
+}
 $dir = (string) getenv('CLAUDE_CONFIG_DIR');
 if ($dir !== '' && is_dir($dir)) {
     file_put_contents($dir . '/env.json', json_encode(getenv(), JSON_THROW_ON_ERROR));
@@ -55,7 +63,7 @@ if (in_array('-p', $args, true)) {
     // queried turn. The file `mode` in CLAUDE_CONFIG_DIR picks a way to misbehave.
     $option = static function (string $name) use ($args): string {
         $at = array_search($name, $args, true);
-        return $at === false ? '' : (string) ($args[(int) $at + 1] ?? '');
+        return $at === false ? '' : ($args[$at + 1] ?? '');
     };
     $emit = static function (array $event): void {
         echo json_encode($event, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES), "\n";
