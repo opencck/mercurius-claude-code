@@ -56,10 +56,12 @@ final class ChildEnv {
     /**
      * @param array<string, string> $parent the environment of the service
      * @param non-empty-string $configDir where the CLI keeps its sign-in
+     * @param ?string $proxy the service's own way out for what the CLI sends by itself; null — the CLI goes directly
      */
     public function __construct(
         private readonly array $parent,
         private readonly string $configDir,
+        private readonly ?string $proxy = null,
     ) {}
 
     /**
@@ -97,6 +99,16 @@ final class ChildEnv {
         $env['CLAUDE_CONFIG_DIR'] = $this->configDir;
         if ($oauthToken !== null && $oauthToken !== '') {
             $env['CLAUDE_CODE_OAUTH_TOKEN'] = $oauthToken;
+        }
+        if ($this->proxy !== null) {
+            // the CLI's own requests take the route of the service; only the loopback (the relay) stays direct.
+            // Both spellings where names differ by case: tools read either. spec: brief/models.md#сеть-модуля-claude
+            foreach (['HTTPS_PROXY' => $this->proxy, 'HTTP_PROXY' => $this->proxy, 'NO_PROXY' => '127.0.0.1,localhost'] as $name => $value) {
+                $extra[$name] = $value;
+                if (PHP_OS_FAMILY !== 'Windows') {
+                    $extra[strtolower($name)] = $value;
+                }
+            }
         }
         return [...$env, ...$extra, ...self::FIXED];
     }

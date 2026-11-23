@@ -19,7 +19,7 @@ Anthropic, поэтому агент говорит с ним так же, ка�
 
 | Маршрут | Ответ |
 |---|---|
-| `GET /health` | `200`, когда CLI найден и достаточно новый, иначе `503`: `{"status","module","cli","auth","detail"}`; `auth` — `login`, `token`, `none` или `metered` |
+| `GET /health` | `200`, когда CLI найден и достаточно новый, иначе `503`: `{"status","module","cli","auth","route","detail"}`; `auth` — `login`, `token`, `none` или `metered` |
 | `GET /auth/status` | то же с планом и признаком, ждёт ли вход своего кода |
 | `POST /auth/login` | запускает `claude auth login`, отвечает `{"url": "…"}` — ссылку открывает владелец |
 | `POST /auth/login/code` | тело `{"code": "…"}` — код со страницы; `200` с новым состоянием, `422`, если CLI код не принял |
@@ -66,7 +66,14 @@ Anthropic, поэтому агент говорит с ним так же, ка�
 | `CLAUDE_CODE_COMMAND` | `claude` | CLI |
 | `CLAUDE_CODE_MIN_VERSION` | `2.1.321` | самый старый CLI, с которым сервис работает |
 | `CLAUDE_CODE_IDLE_SECONDS` | `300` | сколько CLI может молчать во время вызова и сколько вызов ждёт места |
+| `VLESS_URI` | — | выход через VLESS: для запроса к API и для всего, что CLI шлёт сам |
+| `CLAUDE_CODE_PROXY` | — | выход через прокси (`socks5h://user:pass@host:1080`, `http://host:3128`), когда `VLESS_URI` пуст; оба пусты — напрямую |
 | `CLAUDE_CODE_MAX_CONCURRENT` | `4` | сколько процессов CLI работает сразу (около 250 МБ каждый); остальные вызовы ждут по порядку |
+
+При заданном маршруте сервис поднимает свой прокси на loopback и отдаёт его CLI как `HTTPS_PROXY`. Этот прокси
+принимает только `CONNECT` и только к хостам Anthropic (`anthropic.com`, `claude.ai`, `claude.com` и их поддомены) на
+порт 443. TLS заканчивается на стороне Anthropic, поэтому прокси по пути не видит входа. `/health` называет маршрут
+полем `route`: `vless`, `proxy` или `direct`. Маршрут, который не удалось разобрать, останавливает запуск.
 
 Сервис не запускается, если в его окружении задан `ANTHROPIC_BASE_URL` или переключатель Bedrock, Vertex или
 Foundry. `ANTHROPIC_API_KEY` и `ANTHROPIC_AUTH_TOKEN` до CLI не доходят никогда.

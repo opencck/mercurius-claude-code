@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Mercurius\ClaudeCode;
 
 use Amp\ByteStream\ReadableIterableStream;
+use Amp\Http\Client\Connection\DefaultConnectionFactory;
+use Amp\Http\Client\Connection\UnlimitedConnectionPool;
 use Amp\Http\Client\HttpClient;
 use Amp\Http\Client\HttpClientBuilder;
 use Amp\Http\Client\Request as ClientRequest;
@@ -16,6 +18,7 @@ use Amp\Http\Server\RequestHandler\ClosureRequestHandler;
 use Amp\Http\Server\Response;
 use Amp\Http\Server\SocketHttpServer;
 use Amp\Socket\InternetAddress;
+use Amp\Socket\SocketConnector;
 use Generator;
 use InvalidArgumentException;
 use Psr\Log\LoggerInterface;
@@ -33,6 +36,8 @@ use Throwable;
  *      the route of the call, the refusal of a request with Origin, the answer to a used permit, the headers that are
  *      not passed on, the answer streamed back as it comes. One server for all calls instead of a server per call;
  *      the body of the request is not rewritten and not compressed here
+ * spec: brief/models.md#сеть-модуля-claude — the request leaves by the route of the service; TLS ends at the API, so
+ *      a proxy on the way sees no sign-in
  */
 final class Relay {
     public const CONSUMED = 'MERCURIUS_MODEL_ADMISSION_CONSUMED';
@@ -50,12 +55,13 @@ final class Relay {
     /**
      * @param string $upstream the API; anything but HTTPS is taken only on the loopback, for a stand-in in tests
      * @param float $idleSeconds how long the API may send nothing in the middle of an answer
+     * @param ?SocketConnector $route how the request leaves: through VLESS or a proxy; null — directly
      */
     public function __construct(
         private readonly LoggerInterface $logger,
         string $upstream = 'https://api.anthropic.com',
         private readonly float $idleSeconds = 180.0,
-        ?HttpClient $client = null,
+        ?SocketConnector $route = null,
     ) {
         $parts = parse_url($upstream);
         $host = is_array($parts) ? ($parts['host'] ?? '') : '';
@@ -65,7 +71,12 @@ final class Relay {
             throw new InvalidArgumentException('The address of the API must be HTTPS, or HTTP on the loopback for a stand-in');
         }
         $this->upstream = rtrim($upstream, '/');
-        $this->client = $client ?? (new HttpClientBuilder())->retry(0)->followRedirects(0)->skipDefaultUserAgent()->skipDefaultAcceptHeader()->skipAutomaticCompression()->build();
+        // no repeats, no redirects, no headers of its own: what leaves is the request of the CLI and nothing else
+        $builder = (new HttpClientBuilder())->retry(0)->followRedirects(0)->skipDefaultUserAgent()->skipDefaultAcceptHeader()->skipAutomaticCompression();
+        if ($route !== null) {
+            $builder = $builder->usingPool(new UnlimitedConnectionPool(new DefaultConnectionFactory($route)));
+        }
+        $this->client = $builder->build();
     }
 
     /** Opens a permit for one call and gives the address the CLI of this call gets as the address of the API. */

@@ -13,6 +13,7 @@
         "amphp/http-server": "^3",
         "amphp/process": "^2",
         "amphp/socket": "^2",
+        "opencck/mercurius-connectors": "dev-master",
         "psr/log": "^3"
     },
     "require-dev": {
@@ -49,5 +50,10 @@
             "@phpstan",
             "@psalm"
         ]
-    }
+    },
+    "repositories": [{
+        "name": "connectors",
+        "type": "vcs",
+        "url": "https://github.com/opencck/mercurius-connectors"
+    }]
 }

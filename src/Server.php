@@ -48,6 +48,7 @@ final class Server {
         private readonly ModelCall $calls,
         #[SensitiveParameter] private readonly string $token,
         private readonly LoggerInterface $logger,
+        private readonly string $route = 'direct',
     ) {}
 
     public function respond(Request $request): Response {
@@ -60,6 +61,7 @@ final class Server {
                 'module' => 'claude-code',
                 'cli' => $status->version,
                 'auth' => $status->auth,
+                'route' => $this->route,
                 'detail' => $status->detail,
             ]);
         }

@@ -19,7 +19,7 @@ Every route except `/health` needs the token of the module: `Authorization: Bear
 
 | Route | Answer |
 |---|---|
-| `GET /health` | `200` when the CLI is found and new enough, else `503`: `{"status","module","cli","auth","detail"}`; `auth` is `login`, `token`, `none` or `metered` |
+| `GET /health` | `200` when the CLI is found and new enough, else `503`: `{"status","module","cli","auth","route","detail"}`; `auth` is `login`, `token`, `none` or `metered` |
 | `GET /auth/status` | the same with the plan and whether a sign-in waits for its code |
 | `POST /auth/login` | starts `claude auth login`, answers `{"url": "…"}` — the link the owner opens |
 | `POST /auth/login/code` | body `{"code": "…"}` — the code from the page; `200` with the new status, `422` when the CLI did not take it |
@@ -67,7 +67,14 @@ does not count it as the subscription.
 | `CLAUDE_CODE_COMMAND` | `claude` | the CLI |
 | `CLAUDE_CODE_MIN_VERSION` | `2.1.321` | the oldest CLI the service works with |
 | `CLAUDE_CODE_IDLE_SECONDS` | `300` | how long the CLI may be silent in a call, and how long a call waits for a place |
+| `VLESS_URI` | — | the way out through VLESS: for the request to the API and for everything the CLI sends by itself |
+| `CLAUDE_CODE_PROXY` | — | the way out through a proxy (`socks5h://user:pass@host:1080`, `http://host:3128`) when `VLESS_URI` is empty; both empty — directly |
 | `CLAUDE_CODE_MAX_CONCURRENT` | `4` | how many processes of the CLI run at once (about 250 MB each); other calls wait in order |
+
+With a route the service starts its own proxy on the loopback and gives it to the CLI as `HTTPS_PROXY`. That proxy
+takes `CONNECT` only, and only to the hosts of Anthropic (`anthropic.com`, `claude.ai`, `claude.com` and their
+subdomains) on port 443. TLS ends at Anthropic, so a proxy on the way sees no sign-in. `/health` names the route in
+`route`: `vless`, `proxy` or `direct`. A route that cannot be parsed stops the start.
 
 The service refuses to start when `ANTHROPIC_BASE_URL` or a Bedrock, Vertex or Foundry switch is set in its
 environment. `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` never reach the CLI.

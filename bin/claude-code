@@ -8,15 +8,20 @@ declare(strict_types=1);
  * CLAUDE_CODE_HOST (0.0.0.0), CLAUDE_CODE_COMMAND (claude), CLAUDE_CONFIG_DIR (/data/claude — where the CLI keeps its
  * sign-in), CLAUDE_CODE_MIN_VERSION (2.1.321), CLAUDE_CODE_IDLE_SECONDS (300 — how long a call may be silent),
  * CLAUDE_CODE_MAX_CONCURRENT (4 — how many processes of the CLI run at once; a call waits for a place).
+ * The way out: VLESS_URI, else CLAUDE_CODE_PROXY (socks5h://, http://), else directly — for the request to the API
+ * and for everything the CLI sends by itself.
  */
 
 use Mercurius\ClaudeCode\ChildEnv;
+use Mercurius\ClaudeCode\Egress;
 use Mercurius\ClaudeCode\ClaudeCli;
 use Mercurius\ClaudeCode\Login;
 use Mercurius\ClaudeCode\ModelCall;
 use Mercurius\ClaudeCode\Relay;
 use Mercurius\ClaudeCode\RefusedEnvironment;
 use Mercurius\ClaudeCode\Server;
+use Mercurius\Connectors\RouteException;
+use Mercurius\Connectors\RouteFactory;
 use Psr\Log\NullLogger;
 
 use function Amp\trapSignal;
@@ -47,9 +52,25 @@ if (!is_dir($configDir) || !is_writable($configDir)) {
     fwrite(STDERR, sprintf("%s is not a folder the service can write to (run the container as the owner of the folder)\n", $configDir));
     exit(78);
 }
+$logger = new NullLogger();
+// one route for both legs: the relay's request to the API and what the CLI sends by itself
+$routes = ['vless' => trim((string) getenv('VLESS_URI')), 'proxy' => trim((string) getenv('CLAUDE_CODE_PROXY'))];
+$routeName = $routes['vless'] !== '' ? 'vless' : ($routes['proxy'] !== '' ? 'proxy' : 'direct');
+$route = null;
+$egress = null;
+if ($routeName !== 'direct') {
+    try {
+        $route = RouteFactory::fromUri($routes[$routeName], $logger);
+    } catch (RouteException $e) {
+        // the address holds a secret: only its name and the kind of the mistake are said
+        fwrite(STDERR, sprintf("%s is not a route the service can use (%s)\n", $routeName === 'vless' ? 'VLESS_URI' : 'CLAUDE_CODE_PROXY', $e::class));
+        exit(78);
+    }
+    $egress = new Egress($route, $logger);
+}
 /** @var array<string, string> $parent */
 $parent = array_filter(getenv(), 'is_string');
-$env = new ChildEnv($parent, $configDir);
+$env = new ChildEnv($parent, $configDir, $egress?->start());
 try {
     // an inherited address of the API or a cloud switch stops the start: no silent other backend
     $env->build(null);
@@ -58,8 +79,7 @@ try {
     exit(78);
 }
 $cli = new ClaudeCli($command, $env, $minVersion);
-$logger = new NullLogger();
-$relay = new Relay($logger);
+$relay = new Relay($logger, route: $route);
 // the files of a request and the folder the CLI runs in live in the temporary folder: the image is read-only
 $tmp = rtrim(str_replace('\\', '/', sys_get_temp_dir()), '/') ?: '/tmp';
 $idle = max(30.0, (float) (getenv('CLAUDE_CODE_IDLE_SECONDS') ?: 300));
@@ -72,8 +92,9 @@ foreach (glob($tmp . '/claude-code-*', GLOB_ONLYDIR) ?: [] as $stale) {
 }
 $concurrent = max(1, min(32, (int) (getenv('CLAUDE_CODE_MAX_CONCURRENT') ?: 4)));
 $calls = new ModelCall($cli, $relay, $tmp, $tmp . '/claude-code-work', $logger, $idle, $concurrent, $idle);
-$server = (new Server($cli, new Login($cli), $calls, $token, $logger))->start($host, max(1, min(65535, $port)));
+$server = (new Server($cli, new Login($cli), $calls, $token, $logger, $routeName))->start($host, max(1, min(65535, $port)));
 fwrite(STDERR, sprintf("claude-code listening on %s:%d\n", $host, $port));
 trapSignal([2, 15]);
 $server->stop();
 $relay->stop();
+$egress?->stop();

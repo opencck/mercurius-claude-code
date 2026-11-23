@@ -17,7 +17,7 @@ Anthropic Messages API 的形式应答，因此代理与它对话的方式和与
 
 | 路由 | 响应 |
 |---|---|
-| `GET /health` | CLI 已找到且版本足够新时为 `200`，否则 `503`：`{"status","module","cli","auth","detail"}`；`auth` 为 `login`、`token`、`none` 或 `metered` |
+| `GET /health` | CLI 已找到且版本足够新时为 `200`，否则 `503`：`{"status","module","cli","auth","route","detail"}`；`auth` 为 `login`、`token`、`none` 或 `metered` |
 | `GET /auth/status` | 同上，另有套餐以及是否有登录在等待验证码 |
 | `POST /auth/login` | 启动 `claude auth login`，返回 `{"url": "…"}` — 由主人打开的链接 |
 | `POST /auth/login/code` | 请求体 `{"code": "…"}` — 页面上的验证码；成功 `200` 并返回新状态，CLI 未接受时 `422` |
@@ -61,7 +61,13 @@ MCP 服务器向 CLI 列出；服务不执行其中任何一个。
 | `CLAUDE_CODE_COMMAND` | `claude` | CLI |
 | `CLAUDE_CODE_MIN_VERSION` | `2.1.321` | 服务可用的最低 CLI 版本 |
 | `CLAUDE_CODE_IDLE_SECONDS` | `300` | 一次调用中 CLI 可以沉默多久，以及调用等待空位多久 |
+| `VLESS_URI` | — | 经 VLESS 出站：用于发往 API 的请求以及 CLI 自己发出的一切 |
+| `CLAUDE_CODE_PROXY` | — | `VLESS_URI` 为空时经代理出站（`socks5h://user:pass@host:1080`、`http://host:3128`）；两者都为空则直连 |
 | `CLAUDE_CODE_MAX_CONCURRENT` | `4` | 同时运行多少个 CLI 进程（每个约 250 MB）；其余调用按顺序等待 |
+
+有路由时，服务会在 loopback 上启动自己的代理，并以 `HTTPS_PROXY` 交给 CLI。该代理只接受 `CONNECT`，且只通往 Anthropic 的主机
+（`anthropic.com`、`claude.ai`、`claude.com` 及其子域）的 443 端口。TLS 在 Anthropic 处终止，途中的代理看不到登录信息。`/health` 在
+`route` 中给出路由：`vless`、`proxy` 或 `direct`。无法解析的路由会让服务拒绝启动。
 
 如果服务的环境中设置了 `ANTHROPIC_BASE_URL` 或 Bedrock、Vertex、Foundry 开关，服务拒绝启动。`ANTHROPIC_API_KEY` 和
 `ANTHROPIC_AUTH_TOKEN` 永远不会传给 CLI。
