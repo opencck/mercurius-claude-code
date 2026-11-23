@@ -32,7 +32,7 @@ Anthropic Messages API 的形式应答，因此代理与它对话的方式和与
 
 `POST /v1/messages` 接受 `model`、`system`、`messages`、`tools`、`max_tokens`、`stop_sequences`、`output_config.effort`、
 `thinking`（`adaptive` 或 `disabled`）和 `stream`。其他任何字段都以 `400` 拒绝：不会悄悄丢弃任何内容。`cache_control`
-标记会被接受并丢弃 — CLI 自己放置标记。
+标记会被接受并丢弃 — CLI 自己放置标记。工具的 `eager_input_streaming` 会原样传递。
 
 每次调用，服务都会启动一个没有自带工具、只走一轮、不保存会话的 CLI。CLI 把请求发给 loopback 上的中继，中继只放行该次调用的一个请求到
 API（仅当 API 拒绝登录时再放行一次，以便 CLI 续期）。应用拿到的是 API 自己的应答：同样的事件，工具名称还原为应用自己的名称。工具只由一个惰性

@@ -35,7 +35,7 @@ that request and never keeps it.
 
 `POST /v1/messages` takes `model`, `system`, `messages`, `tools`, `max_tokens`, `stop_sequences`, `output_config.effort`,
 `thinking` (`adaptive` or `disabled`) and `stream`. Any other field is refused with `400`: nothing is dropped silently.
-`cache_control` marks are taken and dropped — the CLI places its own.
+`cache_control` marks are taken and dropped — the CLI places its own. `eager_input_streaming` of a tool is passed on.
 
 For every call the service starts the CLI with no tools of its own, one turn and no saved session. The CLI sends its
 request to a relay on the loopback, and the relay lets exactly one request of the call through to the API (one more

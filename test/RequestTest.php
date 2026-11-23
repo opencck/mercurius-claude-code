@@ -48,6 +48,18 @@ final class RequestTest extends TestCase {
         self::assertStringContainsString('"thinking":{"type":"adaptive","display":"summarized"}', $adaptive->body);
     }
 
+    public function testAToolKeepsTheWishForStreamedArgumentsAndLosesItsCacheMark(): void {
+        $request = self::parse(['model' => 'sonnet', 'messages' => [['role' => 'user', 'content' => 'Hi']], 'tools' => [
+            ['name' => 'write', 'description' => 'Write', 'eager_input_streaming' => true, 'input_schema' => ['type' => 'object'], 'cache_control' => ['type' => 'ephemeral']],
+            ['name' => 'read', 'description' => 'Read', 'input_schema' => ['type' => 'object']],
+        ]]);
+        self::assertSame(
+            '{"tools":[{"name":"mcp__mercurius__write","description":"Write","input_schema":{"type":"object","properties":{}},"eager_input_streaming":true},'
+            . '{"name":"mcp__mercurius__read","description":"Read","input_schema":{"type":"object","properties":{}}}]}',
+            $request->body,
+        );
+    }
+
     public function testOneConversationIsOneSessionOfTheCli(): void {
         $first = self::parse(['model' => 'sonnet', 'system' => 'S', 'messages' => [['role' => 'user', 'content' => 'Hi']]]);
         $later = self::parse(['model' => 'sonnet', 'system' => 'S', 'messages' => [['role' => 'user', 'content' => 'Hi'], ['role' => 'assistant', 'content' => 'Hello'], ['role' => 'user', 'content' => 'More']]]);

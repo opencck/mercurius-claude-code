@@ -154,7 +154,12 @@ final class MessagesRequest {
             // the list of the inert server and the body of the request must offer the same shape
             $schema = Schema::normalize($schema);
             $manifest[] = ['name' => $native, 'description' => $description, 'inputSchema' => $schema];
-            $tools[] = ['name' => ToolNames::PREFIX . $native, 'description' => $description, 'input_schema' => $schema];
+            $offered = ['name' => ToolNames::PREFIX . $native, 'description' => $description, 'input_schema' => $schema];
+            if (($tool->eager_input_streaming ?? null) === true) {
+                // the application asked for the arguments of a call as the model writes them, and checks them itself
+                $offered['eager_input_streaming'] = true;
+            }
+            $tools[] = $offered;
         }
         $body->tools = $tools;
         $frames = self::frames($data->messages ?? null, $names);
