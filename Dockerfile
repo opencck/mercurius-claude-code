@@ -17,6 +17,7 @@ COPY composer.json ./
 RUN composer install --no-dev --no-interaction --no-progress --prefer-dist --optimize-autoloader --no-scripts
 COPY src ./src
 COPY bin ./bin
+COPY resources ./resources
 
 FROM php:8.2-cli-bookworm
 # The CLI is one self-contained binary: Node is not needed at run time.
@@ -24,7 +25,7 @@ COPY --from=cli /claude /usr/local/bin/claude
 RUN docker-php-ext-install pcntl \
     && useradd --system --uid 10050 --home /data/claude --shell /usr/sbin/nologin claude \
     && mkdir -p /data/claude && chown claude:claude /data/claude && chmod 700 /data/claude \
-    && echo 'memory_limit=256M' > /usr/local/etc/php/conf.d/claude-code.ini
+    && echo 'memory_limit=512M' > /usr/local/etc/php/conf.d/claude-code.ini
 WORKDIR /app
 COPY --from=build /app /app
 # The CLI reads USER: without it a signed-in CLI says it is not signed in.

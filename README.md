@@ -9,12 +9,13 @@ the agent; the CLI is only the transport, and the sign-in is the CLI's own.
 
 It is an optional module of [Mercurius](https://github.com/opencck/mercurius) and can be used on its own.
 
-**Status: in development.** The frame is here: health, sign-in and the environment of the CLI. Model calls
-(`/v1/messages`) come next.
+**Status: in development.** Health, sign-in and one model call (`/v1/messages`) work against a stand-in CLI and a
+stand-in API. The route to the API through a proxy, the limits of the subscription and the prompt cache come next.
 
 ## API
 
-Every route except `/health` needs `Authorization: Bearer <CLAUDE_CODE_TOKEN>`.
+Every route except `/health` needs the token of the module: `Authorization: Bearer <CLAUDE_CODE_TOKEN>` or
+`x-api-key: <CLAUDE_CODE_TOKEN>` — the header a client of the Messages API sends its key in.
 
 | Route | Answer |
 |---|---|
@@ -23,10 +24,33 @@ Every route except `/health` needs `Authorization: Bearer <CLAUDE_CODE_TOKEN>`.
 | `POST /auth/login` | starts `claude auth login`, answers `{"url": "…"}` — the link the owner opens |
 | `POST /auth/login/code` | body `{"code": "…"}` — the code from the page; `200` with the new status, `422` when the CLI did not take it |
 | `POST /auth/logout` | removes the sign-in |
-| `POST /v1/messages`, `GET /v1/models`, `GET /usage` | not implemented yet (`501`) |
+| `POST /v1/messages` | one model call by the subscription, in the form of the Messages API: a stream of events with `"stream": true`, else one message. Errors have the form and the status of the API |
+| `GET /v1/models` | the models the service knows by name, with their context windows |
+| `GET /usage` | not implemented yet (`501`) |
 
 A request may carry `X-Claude-OAuth-Token` — a token of `claude setup-token`. The service passes it to the CLI for
 that request and never keeps it.
+
+### A model call
+
+`POST /v1/messages` takes `model`, `system`, `messages`, `tools`, `max_tokens`, `stop_sequences`, `output_config.effort`,
+`thinking` (`adaptive` or `disabled`) and `stream`. Any other field is refused with `400`: nothing is dropped silently.
+`cache_control` marks are taken and dropped — the CLI places its own.
+
+For every call the service starts the CLI with no tools of its own, one turn and no saved session. The CLI sends its
+request to a relay on the loopback, and the relay lets exactly one request of the call through to the API (one more
+only after the API refused the sign-in, so the CLI can renew it). The application gets the answer of the API itself:
+the same events, with its own names of tools. The tools are only listed to the CLI by an inert MCP server; the service
+runs none of them.
+
+| Status | When |
+|---|---|
+| `400` | the request has a field or a block the service does not carry |
+| `401` | nobody is signed in, or the CLI would bill an API key instead of the subscription |
+| `429`, `529` and other statuses of the API | as the API answered, with its body and `retry-after` |
+| `502` | the answer was cut, or the CLI ended without a request |
+| `503` | the CLI is missing or too old |
+| `504` | the CLI was silent for too long |
 
 `auth: metered` means the CLI would sign in with an API key or a cloud backend: that bills API usage, so the service
 does not count it as the subscription.
@@ -41,6 +65,7 @@ does not count it as the subscription.
 | `CLAUDE_CONFIG_DIR` | `/data/claude` | where the CLI keeps its sign-in; a volume |
 | `CLAUDE_CODE_COMMAND` | `claude` | the CLI |
 | `CLAUDE_CODE_MIN_VERSION` | `2.1.321` | the oldest CLI the service works with |
+| `CLAUDE_CODE_IDLE_SECONDS` | `300` | how long the CLI may be silent in a call |
 
 The service refuses to start when `ANTHROPIC_BASE_URL` or a Bedrock, Vertex or Foundry switch is set in its
 environment. `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` never reach the CLI.
@@ -64,7 +89,8 @@ composer install
 composer check   # PHPUnit, PHPStan, Psalm
 ```
 
-The tests run against a stand-in CLI (`test/fixtures/fake-claude.php`), without a sign-in and without paid calls.
+The tests run against a stand-in CLI (`test/fixtures/fake-claude.php`) and a stand-in API, without a sign-in and
+without paid calls.
 
 ## License
 

@@ -40,6 +40,20 @@ final class ChildEnv {
     ];
 
     /**
+     * A model call: one request and nothing of the CLI's own agent — no search of tools, no repeats (the relay would
+     * refuse them), no compaction, no reminders in the history, no memory and no instruction files of the CLI.
+     */
+    private const CALL = [
+        'ENABLE_TOOL_SEARCH' => 'false',
+        'CLAUDE_CODE_MAX_RETRIES' => '0',
+        'DISABLE_AUTO_COMPACT' => '1',
+        'DISABLE_COMPACT' => '1',
+        'CLAUDE_CODE_TOTAL_TOKENS_REMINDER' => 'off',
+        'CLAUDE_CODE_DISABLE_AUTO_MEMORY' => '1',
+        'CLAUDE_CODE_DISABLE_CLAUDE_MDS' => '1',
+    ];
+
+    /**
      * @param array<string, string> $parent the environment of the service
      * @param non-empty-string $configDir where the CLI keeps its sign-in
      */
@@ -85,5 +99,23 @@ final class ChildEnv {
             $env['CLAUDE_CODE_OAUTH_TOKEN'] = $oauthToken;
         }
         return [...$env, ...$extra, ...self::FIXED];
+    }
+
+    /**
+     * The environment of a model call: the relay is the only address of the API the child knows.
+     *
+     * ref: references/hermes-official-plugins/claude-subscription-directsdk/directsdk.py@269ddcb:L1032-L1045 — the
+     *      switches of a call; the limit of the answer goes by the CLI's own variable (L1054-L1058)
+     *
+     * @param string $relay the address of the relay with the route of this call
+     * @return array<string, string>
+     * @throws RefusedEnvironment
+     */
+    public function call(#[SensitiveParameter] ?string $oauthToken, string $relay, ?int $maxTokens): array {
+        $extra = ['ANTHROPIC_BASE_URL' => $relay];
+        if ($maxTokens !== null) {
+            $extra['CLAUDE_CODE_MAX_OUTPUT_TOKENS'] = (string) $maxTokens;
+        }
+        return [...$this->build($oauthToken, $extra), ...self::CALL];
     }
 }

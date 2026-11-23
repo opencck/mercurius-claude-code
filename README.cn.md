@@ -8,11 +8,12 @@ Anthropic Messages API 的形式应答，因此代理与它对话的方式和与
 
 它是 [Mercurius](https://github.com/opencck/mercurius) 的可选模块，也可以单独使用。
 
-**状态：开发中。** 框架已就绪：健康检查、登录和 CLI 的环境。模型调用（`/v1/messages`）随后提交。
+**状态：开发中。** 健康检查、登录和单次模型调用（`/v1/messages`）已能在替身 CLI 和替身 API 上运行。经代理访问 API 的路由、订阅的限额和提示缓存随后提交。
 
 ## API
 
-除 `/health` 外，所有路由都需要 `Authorization: Bearer <CLAUDE_CODE_TOKEN>`。
+除 `/health` 外，所有路由都需要模块令牌：`Authorization: Bearer <CLAUDE_CODE_TOKEN>` 或
+`x-api-key: <CLAUDE_CODE_TOKEN>` — Messages API 客户端用来发送密钥的请求头。
 
 | 路由 | 响应 |
 |---|---|
@@ -21,9 +22,30 @@ Anthropic Messages API 的形式应答，因此代理与它对话的方式和与
 | `POST /auth/login` | 启动 `claude auth login`，返回 `{"url": "…"}` — 由主人打开的链接 |
 | `POST /auth/login/code` | 请求体 `{"code": "…"}` — 页面上的验证码；成功 `200` 并返回新状态，CLI 未接受时 `422` |
 | `POST /auth/logout` | 移除登录 |
-| `POST /v1/messages`、`GET /v1/models`、`GET /usage` | 尚未实现（`501`） |
+| `POST /v1/messages` | 按订阅进行的一次模型调用，形式与 Messages API 相同：`"stream": true` 时为事件流，否则为一条消息。错误的形式和状态码与 API 一致 |
+| `GET /v1/models` | 服务按名称识别的模型及其上下文窗口 |
+| `GET /usage` | 尚未实现（`501`） |
 
 请求可以带 `X-Claude-OAuth-Token` — `claude setup-token` 的令牌。服务只在该请求中把它交给 CLI，不做任何保存。
+
+### 模型调用
+
+`POST /v1/messages` 接受 `model`、`system`、`messages`、`tools`、`max_tokens`、`stop_sequences`、`output_config.effort`、
+`thinking`（`adaptive` 或 `disabled`）和 `stream`。其他任何字段都以 `400` 拒绝：不会悄悄丢弃任何内容。`cache_control`
+标记会被接受并丢弃 — CLI 自己放置标记。
+
+每次调用，服务都会启动一个没有自带工具、只走一轮、不保存会话的 CLI。CLI 把请求发给 loopback 上的中继，中继只放行该次调用的一个请求到
+API（仅当 API 拒绝登录时再放行一次，以便 CLI 续期）。应用拿到的是 API 自己的应答：同样的事件，工具名称还原为应用自己的名称。工具只由一个惰性
+MCP 服务器向 CLI 列出；服务不执行其中任何一个。
+
+| 状态码 | 何时 |
+|---|---|
+| `400` | 请求中有服务不传递的字段或块 |
+| `401` | 无人登录，或 CLI 会按 API 密钥而非订阅计费 |
+| `429`、`529` 及 API 的其他状态码 | 与 API 的应答一致，带其响应体和 `retry-after` |
+| `502` | 应答被截断，或 CLI 未发出请求就结束 |
+| `503` | 没有 CLI 或版本过旧 |
+| `504` | CLI 沉默过久 |
 
 `auth: metered` 表示 CLI 会用 API 密钥或云后端登录：那是按 API 计费，服务不把它算作订阅。
 
@@ -37,6 +59,7 @@ Anthropic Messages API 的形式应答，因此代理与它对话的方式和与
 | `CLAUDE_CONFIG_DIR` | `/data/claude` | CLI 保存登录的位置；数据卷 |
 | `CLAUDE_CODE_COMMAND` | `claude` | CLI |
 | `CLAUDE_CODE_MIN_VERSION` | `2.1.321` | 服务可用的最低 CLI 版本 |
+| `CLAUDE_CODE_IDLE_SECONDS` | `300` | 一次调用中 CLI 可以沉默多久 |
 
 如果服务的环境中设置了 `ANTHROPIC_BASE_URL` 或 Bedrock、Vertex、Foundry 开关，服务拒绝启动。`ANTHROPIC_API_KEY` 和
 `ANTHROPIC_AUTH_TOKEN` 永远不会传给 CLI。
@@ -60,7 +83,7 @@ composer install
 composer check   # PHPUnit、PHPStan、Psalm
 ```
 
-测试使用替身 CLI（`test/fixtures/fake-claude.php`），无需登录，也不产生付费调用。
+测试使用替身 CLI（`test/fixtures/fake-claude.php`）和替身 API，无需登录，也不产生付费调用。
 
 ## 许可证
 
