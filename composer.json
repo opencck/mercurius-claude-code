@@ -1,0 +1,52 @@
+{
+    "name": "opencck/mercurius-claude-code",
+    "description": "Claude by subscription for an agent: the official Claude Code as a one-shot client of a model call, behind the Messages API; a module of the Mercurius agent",
+    "type": "project",
+    "license": "MIT",
+    "keywords": ["amphp", "claude", "claude-code", "subscription", "agent"],
+    "require": {
+        "php": ">=8.2",
+        "amphp/amp": "^3",
+        "amphp/byte-stream": "^2",
+        "amphp/file": "^3",
+        "amphp/http-server": "^3",
+        "amphp/process": "^2",
+        "amphp/socket": "^2",
+        "psr/log": "^3"
+    },
+    "require-dev": {
+        "amphp/phpunit-util": "^3",
+        "phpstan/phpstan": "^2",
+        "phpunit/phpunit": "^9.6",
+        "psalm/plugin-phpunit": "^0.22.2",
+        "vimeo/psalm": "^6"
+    },
+    "autoload": {
+        "psr-4": {
+            "Mercurius\\ClaudeCode\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Mercurius\\ClaudeCode\\Test\\": "test/"
+        }
+    },
+    "bin": ["bin/claude-code"],
+    "config": {
+        "sort-packages": true,
+        "platform": {
+            "php": "8.2.27"
+        },
+        "allow-plugins": {}
+    },
+    "scripts": {
+        "test": "php -d zend.assertions=1 -d assert.exception=1 vendor/bin/phpunit",
+        "phpstan": "phpstan analyse --no-progress --memory-limit=1G",
+        "psalm": "psalm --no-progress --show-info=false",
+        "check": [
+            "@test",
+            "@phpstan",
+            "@psalm"
+        ]
+    }
+}

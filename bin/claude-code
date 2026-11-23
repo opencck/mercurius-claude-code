@@ -1,0 +1,61 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * The claude-code service: CLAUDE_CODE_TOKEN (required, 16+ characters), CLAUDE_CODE_PORT (8094),
+ * CLAUDE_CODE_HOST (0.0.0.0), CLAUDE_CODE_COMMAND (claude), CLAUDE_CONFIG_DIR (/data/claude — where the CLI keeps its
+ * sign-in), CLAUDE_CODE_MIN_VERSION (2.1.321).
+ */
+
+use Mercurius\ClaudeCode\ChildEnv;
+use Mercurius\ClaudeCode\ClaudeCli;
+use Mercurius\ClaudeCode\Login;
+use Mercurius\ClaudeCode\RefusedEnvironment;
+use Mercurius\ClaudeCode\Server;
+use Psr\Log\NullLogger;
+
+use function Amp\trapSignal;
+
+foreach ([__DIR__ . '/../vendor/autoload.php', __DIR__ . '/../../../autoload.php'] as $autoload) {
+    if (is_file($autoload)) {
+        require $autoload;
+        break;
+    }
+}
+
+$token = getenv('CLAUDE_CODE_TOKEN');
+if (!is_string($token) || strlen($token) < 16) {
+    fwrite(STDERR, "CLAUDE_CODE_TOKEN is required (16+ characters)\n");
+    exit(78);
+}
+$port = (int) (getenv('CLAUDE_CODE_PORT') ?: 8094);
+$host = (string) (getenv('CLAUDE_CODE_HOST') ?: '0.0.0.0');
+$configDir = (string) (getenv('CLAUDE_CONFIG_DIR') ?: '/data/claude');
+$command = array_values(array_filter(explode(' ', (string) (getenv('CLAUDE_CODE_COMMAND') ?: 'claude')), static fn(string $part): bool => $part !== ''));
+$minVersion = (string) (getenv('CLAUDE_CODE_MIN_VERSION') ?: '2.1.321');
+if ($configDir === '' || $command === [] || preg_match('~^\d+\.\d+\.\d+$~', $minVersion) !== 1) {
+    fwrite(STDERR, "CLAUDE_CONFIG_DIR, CLAUDE_CODE_COMMAND or CLAUDE_CODE_MIN_VERSION is invalid\n");
+    exit(78);
+}
+// the CLI keeps its sign-in here: a folder it cannot write to would fail later, in the middle of a sign-in
+if (!is_dir($configDir) || !is_writable($configDir)) {
+    fwrite(STDERR, sprintf("%s is not a folder the service can write to (run the container as the owner of the folder)\n", $configDir));
+    exit(78);
+}
+/** @var array<string, string> $parent */
+$parent = array_filter(getenv(), 'is_string');
+$env = new ChildEnv($parent, $configDir);
+try {
+    // an inherited address of the API or a cloud switch stops the start: no silent other backend
+    $env->build(null);
+} catch (RefusedEnvironment $e) {
+    fwrite(STDERR, $e->getMessage() . "\n");
+    exit(78);
+}
+$cli = new ClaudeCli($command, $env, $minVersion);
+$server = (new Server($cli, new Login($cli), $token, new NullLogger()))->start($host, max(1, min(65535, $port)));
+fwrite(STDERR, sprintf("claude-code listening on %s:%d\n", $host, $port));
+trapSignal([2, 15]);
+$server->stop();
