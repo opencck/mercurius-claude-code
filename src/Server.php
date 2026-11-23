@@ -25,7 +25,8 @@ use Throwable;
  * `Authorization: Bearer <token>` or as `x-api-key` — the header a client of the Messages API sends its key in:
  * GET /auth/status, POST /auth/login (a link), POST /auth/login/code, POST /auth/logout; POST /v1/messages is one
  * model call by the subscription, answered as the Messages API answers (a stream of events, or one message);
- * GET /v1/models lists the models the service knows by name. GET /usage is not there yet.
+ * GET /v1/models lists the models the service knows by name; GET /usage is the usage of the plan, asked from the
+ * CLI without a model call.
  *
  * spec: brief/models.md#claude-по-подписке
  * spec: brief/skills-mcp.md#здоровье-сервиса-модуля — health is a check of the work, not of the port
@@ -33,6 +34,10 @@ use Throwable;
 final class Server {
     /** the application sends the token of `claude setup-token` with a request; the service never keeps it */
     public const OAUTH_HEADER = 'x-claude-oauth-token';
+    /** the owner's word about paid use beyond the plan, sent with a call: stop (the default), allow or notify */
+    public const EXTRA_USAGE_HEADER = 'x-claude-extra-usage';
+    /** the percent of a window of the plan at which `stop` refuses */
+    public const RESERVE_HEADER = 'x-claude-extra-usage-reserve';
     /** seconds an answer of the CLI about itself is reused: a probe starts a process */
     private const STATUS_SECONDS = 30.0;
     private const MAX_BODY = 4096;
@@ -46,6 +51,8 @@ final class Server {
         private readonly ClaudeCli $cli,
         private readonly Login $login,
         private readonly ModelCall $calls,
+        private readonly Usage $usage,
+        private readonly Limits $limits,
         #[SensitiveParameter] private readonly string $token,
         private readonly LoggerInterface $logger,
         private readonly string $route = 'direct',
@@ -81,11 +88,11 @@ final class Server {
                 'POST /auth/login/code' => $this->loginCode($request),
                 'POST /auth/logout' => $this->logout(),
                 'POST /v1/messages' => $this->messages($request),
-                'GET /v1/models' => self::json(HttpStatus::OK, [
+                'GET /usage' => $this->usage($request),
+                default => self::json(HttpStatus::OK, [
                     'data' => array_map(static fn(array $model): array => ['type' => 'model', 'id' => $model['id'], 'display_name' => $model['id'], 'context_window' => $model['context_window']], Models::offered()),
                     'has_more' => false,
                 ]),
-                default => self::error(HttpStatus::NOT_IMPLEMENTED, 'api_error', 'This route of the service is not implemented yet.'),
             };
         } catch (Throwable $e) {
             $this->logger->error('claude-code failed', ['route' => $route, 'error' => $e::class]);
@@ -117,7 +124,7 @@ final class Server {
         $gone = new DeferredCancellation();
         $request->getClient()->onClose($gone->cancel(...));
         try {
-            $answer = $this->calls->run($call, $token, $gone->getCancellation());
+            $answer = $this->calls->run($call, $token, $gone->getCancellation(), Limits::policy($request->getHeader(self::EXTRA_USAGE_HEADER)), Limits::reserve($request->getHeader(self::RESERVE_HEADER)));
             $headers = $answer->requestId === null ? [] : ['request-id' => $answer->requestId];
             if ($call->stream) {
                 // the source of the cancellation lives as long as the stream: destroyed, it would cancel the call
@@ -137,12 +144,36 @@ final class Server {
                 $this->statuses = [];
             }
             $headers = ['content-type' => 'application/json', ...$e->headers];
-            return $e->body !== null
-                ? new Response($e->status, $headers, $e->body)
-                : new Response($e->status, $headers, json_encode(['type' => 'error', 'error' => ['type' => $e->type, 'message' => $e->getMessage()]], MessagesRequest::JSON));
+            if ($e->body !== null) {
+                return new Response($e->status, $headers, $e->body);
+            }
+            $error = ['type' => $e->type, 'message' => $e->getMessage()];
+            if (isset($e->headers['anthropic-ratelimit-unified-reset'])) {
+                // when the window of the plan reopens: the application takes the model off its choice until then
+                $error['resets_at'] = (int) $e->headers['anthropic-ratelimit-unified-reset'];
+            }
+            return new Response($e->status, $headers, json_encode(['type' => 'error', 'error' => $error], MessagesRequest::JSON));
         } catch (CancelledException) {
             return self::error(HttpStatus::BAD_REQUEST, 'invalid_request_error', 'The request was cancelled.');
         }
+    }
+
+    /**
+     * The usage of the plan, asked from the CLI without a model call; what it says also renews what the service
+     * knows about paid use beyond the plan.
+     */
+    private function usage(Request $request): Response {
+        $token = trim($request->getHeader(self::OAUTH_HEADER) ?? '');
+        $token = $token === '' ? null : $token;
+        [$limits, $reason] = $this->usage->fetch($token);
+        if ($limits === null) {
+            return self::error(HttpStatus::SERVICE_UNAVAILABLE, 'api_error', $reason);
+        }
+        $state = $this->limits->observeUsage(Limits::key($token), $limits);
+        return self::json(HttpStatus::OK, [
+            'rate_limits' => $limits,
+            'extra_usage' => ['using' => $state['using'], 'resets_at' => $state['resetsAt'] === null ? null : (int) round($state['resetsAt'])],
+        ]);
     }
 
     private function authStatus(Request $request): Response {

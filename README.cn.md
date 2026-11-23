@@ -24,7 +24,7 @@ Anthropic Messages API 的形式应答，因此代理与它对话的方式和与
 | `POST /auth/logout` | 移除登录 |
 | `POST /v1/messages` | 按订阅进行的一次模型调用，形式与 Messages API 相同：`"stream": true` 时为事件流，否则为一条消息。错误的形式和状态码与 API 一致 |
 | `GET /v1/models` | 服务按名称识别的模型及其上下文窗口 |
-| `GET /usage` | 尚未实现（`501`） |
+| `GET /usage` | 套餐用量，不调用模型而向 CLI 查询：`{"rate_limits": …, "extra_usage": {"using", "resets_at"}}`；CLI 无法回答时为 `503` |
 
 请求可以带 `X-Claude-OAuth-Token` — `claude setup-token` 的令牌。服务只在该请求中把它交给 CLI，不做任何保存。
 
@@ -43,12 +43,27 @@ MCP 服务器向 CLI 列出；服务不执行其中任何一个。
 | `400` | 请求中有服务不传递的字段或块 |
 | `401` | 无人登录，或 CLI 会按 API 密钥而非订阅计费 |
 | `429`、`529` 及 API 的其他状态码 | 与 API 的应答一致，带其响应体和 `retry-after` |
+| 服务返回的 `429` | 将开始套餐之外的付费使用，而它未被允许（见下文） |
 | `502` | 应答被截断，或 CLI 未发出请求就结束 |
 | `529` | 调用等待期间，CLI 的所有空位一直被占用 |
 | `503` | 没有 CLI 或版本过旧 |
 | `504` | CLI 沉默过久 |
 
 `auth: metered` 表示 CLI 会用 API 密钥或云后端登录：那是按 API 计费，服务不把它算作订阅。
+
+### 套餐限额与超额付费
+
+当套餐的某个窗口已用满，且账户开启了额外用量时，Anthropic 会在订阅之外对后续请求计费。此时该怎么做，由调用通过请求头
+`X-Claude-Extra-Usage` 指定：
+
+| 取值 | 服务的行为 |
+|---|---|
+| `stop`（默认值，任何未知取值也按它处理） | 在启动 CLI 之前拒绝：`429`，带 `anthropic-ratelimit-unified-status: rejected`、`anthropic-ratelimit-unified-reset`、`retry-after` 和 `error.resets_at` — 与 API 在窗口用尽时拒绝所用的请求头相同。无法得知的状态同样拒绝 |
+| `allow` | 发送请求 |
+| `notify` | 发送请求；是否正在超额付费见 `GET /usage` |
+
+`X-Claude-Extra-Usage-Reserve: 80` 让 `stop` 在窗口达到 80% 时就拒绝 — 早于第一个付费请求，因为越过限额的那个请求已经计费。服务从调用期间
+CLI 的事件得知状态；没有状态时向 CLI 询问一次（不调用模型）。状态保存在内存中，按登录分别记录。
 
 ## 设置
 

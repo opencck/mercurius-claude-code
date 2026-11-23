@@ -15,10 +15,12 @@ use Amp\Socket\InternetAddress;
 use League\Uri\Http;
 use Mercurius\ClaudeCode\ChildEnv;
 use Mercurius\ClaudeCode\ClaudeCli;
+use Mercurius\ClaudeCode\Limits;
 use Mercurius\ClaudeCode\Login;
 use Mercurius\ClaudeCode\ModelCall;
 use Mercurius\ClaudeCode\Relay;
 use Mercurius\ClaudeCode\Server;
+use Mercurius\ClaudeCode\Usage;
 use Psr\Log\NullLogger;
 
 use function Amp\async;
@@ -92,13 +94,18 @@ final class CallTest extends AsyncTestCase {
         }
         $cli = new ClaudeCli([PHP_BINARY, __DIR__ . '/fixtures/fake-claude.php'], new ChildEnv($base, $this->dir), '2.1.321');
         $this->relay = new Relay(new NullLogger(), 'http://' . $api->getServers()[0]->getAddress()->toString(), 10.0);
-        $calls = new ModelCall($cli, $this->relay, $this->dir . '/tmp', $this->dir . '/work', new NullLogger(), $idle, $concurrent, $queue);
-        return new Server($cli, new Login($cli), $calls, self::TOKEN, new NullLogger());
+        $usage = new Usage($cli, $this->relay, $this->dir . '/work');
+        $limits = new Limits($usage->fetch(...));
+        $calls = new ModelCall($cli, $this->relay, $limits, $this->dir . '/tmp', $this->dir . '/work', new NullLogger(), $idle, $concurrent, $queue);
+        return new Server($cli, new Login($cli), $calls, $usage, $limits, self::TOKEN, new NullLogger());
     }
 
-    /** @param array<string, mixed> $body */
-    private function call(Server $server, array $body): Response {
-        $request = new Request($this->createMock(Client::class), 'POST', Http::new('http://claude-code/v1/messages'), ['x-api-key' => self::TOKEN], json_encode($body, JSON_THROW_ON_ERROR));
+    /**
+     * @param array<string, mixed> $body
+     * @param array<non-empty-string, string> $headers
+     */
+    private function call(Server $server, array $body, array $headers = []): Response {
+        $request = new Request($this->createMock(Client::class), 'POST', Http::new('http://claude-code/v1/messages'), ['x-api-key' => self::TOKEN, ...$headers], json_encode($body, JSON_THROW_ON_ERROR));
         return $server->respond($request);
     }
 
@@ -426,6 +433,95 @@ final class CallTest extends AsyncTestCase {
             $third = $this->call($server, $body);
         }
         self::assertSame('Third', self::firstText($third));
+    }
+
+    public function testTheUsageOfThePlanIsAskedFromTheCliWithoutAModelCall(): void {
+        $server = $this->server();
+        file_put_contents($this->dir . '/usage.json', json_encode(['limits' => [['kind' => 'session', 'percent' => 100, 'resets_at' => '2030-01-01T00:00:00Z'], ['kind' => 'weekly_all', 'percent' => 40, 'resets_at' => '2030-01-05T00:00:00Z']], 'extra_usage' => ['is_enabled' => true]], JSON_THROW_ON_ERROR));
+
+        $response = $server->respond(new Request($this->createMock(Client::class), 'GET', Http::new('http://claude-code/usage'), ['x-api-key' => self::TOKEN]));
+
+        self::assertSame(200, $response->getStatus());
+        /** @var array{rate_limits: array{limits: list<array{kind: string, percent: int}>}, extra_usage: array{using: bool, resets_at: ?int}} $usage */
+        $usage = self::json($response);
+        self::assertSame(['session', 100], [$usage['rate_limits']['limits'][0]['kind'], $usage['rate_limits']['limits'][0]['percent']]);
+        self::assertSame(['using' => true, 'resets_at' => 1893456000], $usage['extra_usage'], 'extra usage is on and a window of the account is full');
+        $env = $this->file('usage-env.json');
+        self::assertIsString($env['ANTHROPIC_BASE_URL']);
+        self::assertStringContainsString('/admit/', $env['ANTHROPIC_BASE_URL'], 'the CLI ran behind a permit nobody uses');
+        self::assertArrayNotHasKey('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', $env, 'with that switch the CLI skips the fetch of the limits');
+        self::assertSame([], $this->seen);
+    }
+
+    public function testPaidUseBeyondThePlanIsRefusedUnlessTheOwnerAllowedIt(): void {
+        $server = $this->server();
+        $body = ['model' => 'sonnet', 'messages' => [['role' => 'user', 'content' => 'Hi']]];
+        file_put_contents($this->dir . '/usage.json', json_encode(['limits' => [['kind' => 'session', 'percent' => 100, 'resets_at' => '2030-01-01T00:00:00Z']], 'extra_usage' => ['is_enabled' => true]], JSON_THROW_ON_ERROR));
+        $this->script = [['status' => 200, 'body' => self::sse(self::text('Paid'))], ['status' => 200, 'body' => self::sse(self::text('Paid again'))]];
+
+        $refused = $this->call($server, $body);
+
+        self::assertSame(429, $refused->getStatus());
+        self::assertSame(['rejected', '1893456000'], [$refused->getHeader('anthropic-ratelimit-unified-status'), $refused->getHeader('anthropic-ratelimit-unified-reset')]);
+        self::assertGreaterThan(0, (int) $refused->getHeader('retry-after'));
+        /** @var array{error: array{type: string, message: string, resets_at: int}} $error */
+        $error = self::json($refused);
+        self::assertSame(['rate_limit_error', 1893456000], [$error['error']['type'], $error['error']['resets_at']]);
+        self::assertStringContainsString('2030-01-01T00:00:00Z', $error['error']['message']);
+        self::assertSame([], $this->seen, 'nothing was sent and nothing was billed');
+        self::assertFileDoesNotExist($this->dir . '/args.json', 'the CLI was not started for the call');
+
+        $this->call($server, $body);
+        self::assertSame('1', file_get_contents($this->dir . '/usage-count'), 'the state stands until the window reopens: the CLI is not asked again');
+
+        self::assertSame('Paid', self::firstText($this->call($server, $body, [Server::EXTRA_USAGE_HEADER => 'allow'])));
+        self::assertSame('Paid again', self::firstText($this->call($server, $body, [Server::EXTRA_USAGE_HEADER => 'notify'])));
+        self::assertSame(429, $this->call($server, $body, [Server::EXTRA_USAGE_HEADER => 'alow'])->getStatus(), 'a word the service does not know is stop: a typo must not spend');
+    }
+
+    public function testAReserveStopsBeforeTheFirstPaidRequestAndAnUnknownStateIsARefusal(): void {
+        $server = $this->server();
+        $body = ['model' => 'sonnet', 'messages' => [['role' => 'user', 'content' => 'Hi']]];
+        file_put_contents($this->dir . '/usage.json', json_encode(['five_hour' => ['utilization' => 0.85, 'resets_at' => '2030-01-01T00:00:00Z'], 'seven_day' => ['utilization' => 0.2], 'extra_usage' => ['is_enabled' => true]], JSON_THROW_ON_ERROR));
+        $this->script = [['status' => 200, 'body' => self::sse(self::text('Within the plan'))]];
+
+        $early = $this->call($server, $body, [Server::RESERVE_HEADER => '80']);
+        self::assertSame(429, $early->getStatus());
+        self::assertStringContainsString('80%', self::error($early)['message']);
+
+        // another sign-in has its own state: the same windows without a reserve are within the plan
+        self::assertSame('Within the plan', self::firstText($this->call($server, $body, [Server::OAUTH_HEADER => 'sk-ant-oat01-another'])));
+
+        file_put_contents($this->dir . '/usage.json', 'null');
+        $unknown = $this->call($server, $body, [Server::OAUTH_HEADER => 'sk-ant-oat01-third']);
+        self::assertSame(429, $unknown->getStatus());
+        self::assertNull($unknown->getHeader('anthropic-ratelimit-unified-reset'));
+        self::assertStringContainsString('unknown', self::error($unknown)['message']);
+    }
+
+    public function testWhatTheCliSaysAboutTheWindowsDuringACallIsRemembered(): void {
+        $server = $this->server();
+        $body = ['model' => 'sonnet', 'messages' => [['role' => 'user', 'content' => 'Hi']]];
+        $this->script = [['status' => 200, 'body' => self::sse(self::text('The one that crossed the limit'))]];
+        file_put_contents($this->dir . '/rate-limit.json', json_encode(['rateLimitType' => 'five_hour', 'overageStatus' => 'allowed', 'isUsingOverage' => true, 'resetsAt' => 1893456000], JSON_THROW_ON_ERROR));
+
+        self::assertSame('The one that crossed the limit', self::firstText($this->call($server, $body)));
+        // the CLI of the first call is put away in the background: its word is taken when it ends
+        $next = $this->call($server, $body);
+        for ($i = 0; $i < 50 && $next->getStatus() !== 429; $i++) {
+            delay(0.1);
+            $next = $this->call($server, $body);
+        }
+        self::assertSame(429, $next->getStatus(), 'the request that crossed the limit was billed; the next one is refused');
+        self::assertSame('1893456000', $next->getHeader('anthropic-ratelimit-unified-reset'));
+        self::assertSame('1', file_get_contents($this->dir . '/usage-count'), 'the event of the call was enough: no second question to the CLI');
+
+        file_put_contents($this->dir . '/mode', 'limit');
+        $local = $this->call($server, $body, [Server::EXTRA_USAGE_HEADER => 'allow']);
+        self::assertSame(429, $local->getStatus());
+        self::assertSame(['rejected', '1893456000'], [$local->getHeader('anthropic-ratelimit-unified-status'), $local->getHeader('anthropic-ratelimit-unified-reset')]);
+        self::assertStringContainsString('session limit', self::error($local)['message']);
+        self::assertCount(1, $this->seen);
     }
 
     public function testTheModelsTheServiceKnowsAreListed(): void {

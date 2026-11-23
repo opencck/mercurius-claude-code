@@ -74,6 +74,7 @@ final class ModelCall {
     public function __construct(
         private readonly ClaudeCli $cli,
         private readonly Relay $relay,
+        private readonly Limits $limits,
         private readonly string $tmpDir,
         private readonly string $workDir,
         private readonly LoggerInterface $logger,
@@ -84,10 +85,12 @@ final class ModelCall {
 
     /**
      * @param ?string $oauthToken the token of `claude setup-token` the application sent with the request
+     * @param string $policy the owner's word about paid use beyond the plan: stop, allow or notify
+     * @param float $reserve the percent of a window at which `stop` refuses
      * @throws CallFailed
      * @throws CancelledException
      */
-    public function run(MessagesRequest $request, #[\SensitiveParameter] ?string $oauthToken, Cancellation $cancellation): Answer {
+    public function run(MessagesRequest $request, #[\SensitiveParameter] ?string $oauthToken, Cancellation $cancellation, string $policy = Limits::STOP, float $reserve = 100.0): Answer {
         try {
             $this->take(new CompositeCancellation($cancellation, new TimeoutCancellation($this->queueSeconds)));
         } catch (CancelledException $e) {
@@ -104,7 +107,12 @@ final class ModelCall {
             }
         };
         try {
-            return $this->start($request, $oauthToken, $cancellation, $free);
+            // after the wait for a place: calls that ran meanwhile may have crossed the limit
+            $this->limits->admit($oauthToken, $policy, $reserve);
+            $observe = function (array $event) use ($oauthToken, $policy, $reserve): ?array {
+                return $this->limits->observeEvent($oauthToken, $event, $policy, $reserve);
+            };
+            return $this->start($request, $oauthToken, $cancellation, $free, $observe);
         } catch (\Throwable $e) {
             // the call did not start, or failed before its answer: the place is free at once
             $free();
@@ -143,10 +151,12 @@ final class ModelCall {
 
     /**
      * @param \Closure(): void $free gives back the place of the call: held until its process is gone
+     * @param \Closure(array<array-key, mixed>): ?array{using: bool, resetsAt: ?float} $observe takes what the CLI says
+     *        about the windows of the plan
      * @throws CallFailed
      * @throws CancelledException
      */
-    private function start(MessagesRequest $request, #[\SensitiveParameter] ?string $oauthToken, Cancellation $cancellation, \Closure $free): Answer {
+    private function start(MessagesRequest $request, #[\SensitiveParameter] ?string $oauthToken, Cancellation $cancellation, \Closure $free, \Closure $observe): Answer {
         $admission = new Admission($request->names);
         $relay = $this->relay->admit($admission);
         $dir = $this->tmpDir . '/claude-code-' . bin2hex(random_bytes(8));
@@ -197,9 +207,9 @@ final class ModelCall {
         // the application may go away at any moment of the call, also in the middle of an answer: the CLI is stopped,
         // and with it the permit and the request to the API — nothing is paid for an answer nobody reads
         $subscription = $cancellation->subscribe(static fn() => self::kill($process));
-        $drive = async(function () use ($process, $request, $outcome, $admission, $dir, $cancellation, $subscription, $free): bool {
+        $drive = async(function () use ($process, $request, $outcome, $admission, $dir, $cancellation, $subscription, $free, $observe): bool {
             try {
-                $this->drive($process, $request, $outcome);
+                $this->drive($process, $request, $outcome, $observe);
             } finally {
                 $free();
                 $cancellation->unsubscribe($subscription);
@@ -229,7 +239,8 @@ final class ModelCall {
         });
     }
 
-    private function drive(Process $process, MessagesRequest $request, Outcome $outcome): void {
+    /** @param \Closure(array<array-key, mixed>): ?array{using: bool, resetsAt: ?float} $observe */
+    private function drive(Process $process, MessagesRequest $request, Outcome $outcome, \Closure $observe): void {
         /** @var Queue<array<array-key, mixed>> $events */
         $events = new Queue();
         async(static function () use ($process, $events): void {
@@ -297,6 +308,11 @@ final class ModelCall {
             while ($iterator->continue()) {
                 $touch();
                 $event = $iterator->getValue();
+                if (($event['type'] ?? null) === 'rate_limit_event') {
+                    // the CLI reports the windows of the plan in its output: the only word about them during a call
+                    $outcome->resetsAt = $observe($event)['resetsAt'] ?? $outcome->resetsAt;
+                    continue;
+                }
                 if (($event['type'] ?? null) !== 'assistant') {
                     continue;
                 }
@@ -366,7 +382,16 @@ final class ModelCall {
         if ($outcome->nativeError !== null) {
             $status = self::NATIVE_STATUS[$outcome->nativeCode] ?? 502;
             $text = $status === 401 ? 'Nobody is signed in to Claude, or the sign-in is no longer valid' : 'Claude Code refused the request';
-            return new CallFailed($status, self::TYPES[$status] ?? 'api_error', $text . ($outcome->nativeError === '' ? '' : ': ' . $outcome->nativeError));
+            $headers = [];
+            if ($status === 429 && $outcome->resetsAt !== null && $outcome->resetsAt > microtime(true)) {
+                // the CLI refused by a used-up window itself: the same headers the API refuses with
+                $headers = [
+                    'anthropic-ratelimit-unified-status' => 'rejected',
+                    'anthropic-ratelimit-unified-reset' => (string) (int) round($outcome->resetsAt),
+                    'retry-after' => (string) max(1, (int) ceil($outcome->resetsAt - microtime(true))),
+                ];
+            }
+            return new CallFailed($status, self::TYPES[$status] ?? 'api_error', $text . ($outcome->nativeError === '' ? '' : ': ' . $outcome->nativeError), null, $headers);
         }
         return new CallFailed(502, 'api_error', 'Claude Code ended without a request to the model' . $said);
     }

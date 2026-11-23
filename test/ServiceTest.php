@@ -11,11 +11,13 @@ use Amp\PHPUnit\AsyncTestCase;
 use League\Uri\Http;
 use Mercurius\ClaudeCode\ChildEnv;
 use Mercurius\ClaudeCode\ClaudeCli;
+use Mercurius\ClaudeCode\Limits;
 use Mercurius\ClaudeCode\Login;
 use Mercurius\ClaudeCode\ModelCall;
 use Mercurius\ClaudeCode\Relay;
 use Mercurius\ClaudeCode\RefusedEnvironment;
 use Mercurius\ClaudeCode\Server;
+use Mercurius\ClaudeCode\Usage;
 use Psr\Log\NullLogger;
 
 use function Amp\ByteStream\buffer;
@@ -67,8 +69,11 @@ final class ServiceTest extends AsyncTestCase {
     private function server(?ClaudeCli $cli = null): Server {
         $cli ??= $this->cli();
         // no call is made here: the relay never starts and the address of the API is never used
-        $calls = new ModelCall($cli, new Relay(new NullLogger()), $this->dir, $this->dir . '/work', new NullLogger());
-        return new Server($cli, new Login($cli), $calls, self::TOKEN, new NullLogger());
+        $relay = new Relay(new NullLogger());
+        $usage = new Usage($cli, $relay, $this->dir . '/work');
+        $limits = new Limits($usage->fetch(...));
+        $calls = new ModelCall($cli, $relay, $limits, $this->dir, $this->dir . '/work', new NullLogger());
+        return new Server($cli, new Login($cli), $calls, $usage, $limits, self::TOKEN, new NullLogger());
     }
 
     /**
@@ -173,11 +178,5 @@ final class ServiceTest extends AsyncTestCase {
             }
         }
         self::assertArrayNotHasKey('CLAUDE_CODE_USE_VERTEX', (new ChildEnv(['CLAUDE_CODE_USE_VERTEX' => '0'] + self::base(), $this->dir))->build(null), 'a switch that is off is no switch');
-    }
-
-    public function testUsageIsNotThereYet(): void {
-        $response = $this->server()->respond($this->request('GET', '/usage'));
-        self::assertSame(501, $response->getStatus());
-        self::assertSame('error', self::json($response)['type']);
     }
 }

@@ -70,6 +70,23 @@ if (in_array('-p', $args, true)) {
         flush();
     };
     $mode = is_file($dir . '/mode') ? trim((string) file_get_contents($dir . '/mode')) : 'ok';
+    if ($option('--settings') === '') {
+        // a question about the plan, without a model call: a control request on the input, its answer on the output.
+        // The file `usage.json` is what the plan says; without it a window is far from full and extra usage is off.
+        /** @var mixed $asked */
+        $asked = json_decode((string) fgets(STDIN), true, 16, JSON_THROW_ON_ERROR);
+        /** @var mixed $id */
+        $id = is_array($asked) ? ($asked['request_id'] ?? '') : '';
+        file_put_contents($dir . '/usage-env.json', json_encode(getenv(), JSON_THROW_ON_ERROR));
+        file_put_contents($dir . '/usage-count', (string) ((int) @file_get_contents($dir . '/usage-count') + 1));
+        /** @var mixed $limits */
+        $limits = is_file($dir . '/usage.json')
+            ? json_decode((string) file_get_contents($dir . '/usage.json'), true, 16, JSON_THROW_ON_ERROR)
+            : ['limits' => [['kind' => 'session', 'percent' => 12, 'resets_at' => '2030-01-01T00:00:00Z']], 'extra_usage' => ['is_enabled' => false]];
+        $emit(['type' => 'system', 'subtype' => 'init']);
+        $emit(['type' => 'control_response', 'response' => ['request_id' => $id, 'subtype' => 'success', 'response' => ['rate_limits' => $limits, 'rate_limits_available' => true]]]);
+        exit(0);
+    }
     file_put_contents($dir . '/args.json', json_encode($args, JSON_THROW_ON_ERROR));
     $system = (string) file_get_contents($option('--system-prompt-file'));
     /** @var array{env: array{CLAUDE_CODE_EXTRA_BODY: string}} $settings */
@@ -149,6 +166,18 @@ if (in_array('-p', $args, true)) {
         }
         if (($frame->type ?? null) !== 'user') {
             continue;
+        }
+        if (is_file($dir . '/rate-limit.json')) {
+            // the CLI says in its output how the windows of the plan stand
+            /** @var mixed $info */
+            $info = json_decode((string) file_get_contents($dir . '/rate-limit.json'), true, 16, JSON_THROW_ON_ERROR);
+            $emit(['type' => 'rate_limit_event', 'rate_limit_info' => $info]);
+        }
+        if ($mode === 'limit') {
+            // a used-up window: the CLI refuses by itself and sends nothing
+            $emit(['type' => 'assistant', 'error' => 'rate_limit', 'message' => ['content' => [['type' => 'text', 'text' => "You've hit your session limit"]]]]);
+            $emit(['type' => 'result', 'subtype' => 'success', 'is_error' => true, 'num_turns' => 1]);
+            exit(1);
         }
         if ($mode === 'logged-out') {
             $emit(['type' => 'assistant', 'error' => 'authentication_failed', 'message' => ['content' => [['type' => 'text', 'text' => 'Not logged in · Please run /login']]]]);

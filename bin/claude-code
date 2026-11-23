@@ -15,11 +15,13 @@ declare(strict_types=1);
 use Mercurius\ClaudeCode\ChildEnv;
 use Mercurius\ClaudeCode\Egress;
 use Mercurius\ClaudeCode\ClaudeCli;
+use Mercurius\ClaudeCode\Limits;
 use Mercurius\ClaudeCode\Login;
 use Mercurius\ClaudeCode\ModelCall;
 use Mercurius\ClaudeCode\Relay;
 use Mercurius\ClaudeCode\RefusedEnvironment;
 use Mercurius\ClaudeCode\Server;
+use Mercurius\ClaudeCode\Usage;
 use Mercurius\Connectors\RouteException;
 use Mercurius\Connectors\RouteFactory;
 use Psr\Log\NullLogger;
@@ -91,8 +93,10 @@ foreach (glob($tmp . '/claude-code-*', GLOB_ONLYDIR) ?: [] as $stale) {
     }
 }
 $concurrent = max(1, min(32, (int) (getenv('CLAUDE_CODE_MAX_CONCURRENT') ?: 4)));
-$calls = new ModelCall($cli, $relay, $tmp, $tmp . '/claude-code-work', $logger, $idle, $concurrent, $idle);
-$server = (new Server($cli, new Login($cli), $calls, $token, $logger, $routeName))->start($host, max(1, min(65535, $port)));
+$usage = new Usage($cli, $relay, $tmp . '/claude-code-work');
+$limits = new Limits($usage->fetch(...));
+$calls = new ModelCall($cli, $relay, $limits, $tmp, $tmp . '/claude-code-work', $logger, $idle, $concurrent, $idle);
+$server = (new Server($cli, new Login($cli), $calls, $usage, $limits, $token, $logger, $routeName))->start($host, max(1, min(65535, $port)));
 fwrite(STDERR, sprintf("claude-code listening on %s:%d\n", $host, $port));
 trapSignal([2, 15]);
 $server->stop();

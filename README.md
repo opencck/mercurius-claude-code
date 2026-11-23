@@ -26,7 +26,7 @@ Every route except `/health` needs the token of the module: `Authorization: Bear
 | `POST /auth/logout` | removes the sign-in |
 | `POST /v1/messages` | one model call by the subscription, in the form of the Messages API: a stream of events with `"stream": true`, else one message. Errors have the form and the status of the API |
 | `GET /v1/models` | the models the service knows by name, with their context windows |
-| `GET /usage` | not implemented yet (`501`) |
+| `GET /usage` | the usage of the plan, asked from the CLI without a model call: `{"rate_limits": …, "extra_usage": {"using", "resets_at"}}`; `503` when the CLI could not tell |
 
 A request may carry `X-Claude-OAuth-Token` — a token of `claude setup-token`. The service passes it to the CLI for
 that request and never keeps it.
@@ -48,6 +48,7 @@ runs none of them.
 | `400` | the request has a field or a block the service does not carry |
 | `401` | nobody is signed in, or the CLI would bill an API key instead of the subscription |
 | `429`, `529` and other statuses of the API | as the API answered, with its body and `retry-after` |
+| `429` from the service | paid use beyond the plan would start and was not allowed (see below) |
 | `502` | the answer was cut, or the CLI ended without a request |
 | `529` | every place for the CLI stayed busy while the call waited |
 | `503` | the CLI is missing or too old |
@@ -55,6 +56,22 @@ runs none of them.
 
 `auth: metered` means the CLI would sign in with an API key or a cloud backend: that bills API usage, so the service
 does not count it as the subscription.
+
+### Limits of the plan and paid use beyond it
+
+When a window of the plan is full and extra usage is on for the account, Anthropic bills further requests on top of
+the subscription. A call says what to do then in the header `X-Claude-Extra-Usage`:
+
+| Value | What the service does |
+|---|---|
+| `stop` (the default, and any unknown value) | refuses before the CLI starts: `429` with `anthropic-ratelimit-unified-status: rejected`, `anthropic-ratelimit-unified-reset`, `retry-after` and `error.resets_at` — the same headers the API refuses a used-up window with. A state that cannot be learned is refused too |
+| `allow` | sends the request |
+| `notify` | sends the request; whether paid use is drawn is in `GET /usage` |
+
+`X-Claude-Extra-Usage-Reserve: 80` makes `stop` refuse once a window reaches 80 percent — before the first paid
+request, since the request that crosses the limit is already billed. The service learns the state from the events of
+the CLI during calls and, when it has none, from one question to the CLI (no model call). The state lives in memory,
+per sign-in.
 
 ## Settings
 

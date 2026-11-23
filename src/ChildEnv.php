@@ -130,4 +130,17 @@ final class ChildEnv {
         }
         return [...$this->build($oauthToken, $extra), ...self::CALL];
     }
+
+    /**
+     * The environment of a question to the CLI about the plan. The switch of nonessential traffic is left out: with
+     * it the CLI skips the fetch of the limits that is asked for.
+     *
+     * @return array<string, string>
+     * @throws RefusedEnvironment
+     */
+    public function probe(#[SensitiveParameter] ?string $oauthToken, string $relay): array {
+        $env = $this->call($oauthToken, $relay, null);
+        unset($env['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC']);
+        return $env;
+    }
 }
