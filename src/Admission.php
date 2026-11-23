@@ -35,6 +35,8 @@ final class Admission {
     public array $headers = [];
     /** the kind of a failure between the relay and the API, when there was one */
     public ?string $failure = null;
+    /** the answer ended before it was complete: said after the events that did come, never instead of them */
+    public ?CallFailed $cut = null;
     private string $errorBody = '';
     private bool $authRetryUsed = false;
     private bool $closed = false;
@@ -112,11 +114,11 @@ final class Admission {
         if ($this->frames->isComplete()) {
             return;
         }
-        if ($this->capture->complete()) {
-            $this->frames->complete();
-        } else {
-            $this->frames->error(new CallFailed(502, 'api_error', 'The answer of the API ended before it was complete' . ($this->failure === null ? '' : ' (' . $this->failure . ')')));
+        if (!$this->capture->complete()) {
+            $this->cut = new CallFailed(502, 'api_error', 'The answer of the API ended before it was complete' . ($this->failure === null ? '' : ' (' . $this->failure . ')'));
         }
+        // the events already taken stay in the queue for the application: an error of the queue would drop them
+        $this->frames->complete();
     }
 
     /** The call is over: nothing more goes to the API by this permit, a request in flight is dropped. */

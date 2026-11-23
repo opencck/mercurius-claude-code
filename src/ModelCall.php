@@ -143,7 +143,7 @@ final class ModelCall {
             self::kill($process);
             throw self::failure($admission, $outcome, self::said($stderr));
         }
-        return new Answer($admission->requestId, $admission->frames->iterate(), $admission->capture, static function () use ($drive, $process): void {
+        return new Answer($admission, static function () use ($drive, $process): void {
             async(static function () use ($drive, $process): void {
                 try {
                     $drive->await(new TimeoutCancellation(self::REAP_SECONDS));
@@ -278,18 +278,22 @@ final class ModelCall {
             }
             return new CallFailed($status, self::TYPES[$status] ?? 'api_error', sprintf('The API answered %d', $admission->status), null, $admission->headers);
         }
-        if ($admission->failure !== null) {
-            return new CallFailed(502, 'api_error', sprintf('The request did not reach the API (%s)', $admission->failure));
-        }
+        // what the service stopped the CLI for comes first: a request dropped by that stop is its consequence
         if ($outcome->timedOut) {
             return new CallFailed(504, 'timeout_error', 'Claude Code was silent for too long' . $said);
+        }
+        if ($outcome->detail !== null) {
+            return new CallFailed(502, 'api_error', $outcome->detail . $said);
+        }
+        if ($admission->failure !== null) {
+            return new CallFailed(502, 'api_error', sprintf('The request did not reach the API (%s)', $admission->failure));
         }
         if ($outcome->nativeError !== null) {
             $status = self::NATIVE_STATUS[$outcome->nativeCode] ?? 502;
             $text = $status === 401 ? 'Nobody is signed in to Claude, or the sign-in is no longer valid' : 'Claude Code refused the request';
             return new CallFailed($status, self::TYPES[$status] ?? 'api_error', $text . ($outcome->nativeError === '' ? '' : ': ' . $outcome->nativeError));
         }
-        return new CallFailed(502, 'api_error', ($outcome->detail ?? 'Claude Code ended without a request to the model') . $said);
+        return new CallFailed(502, 'api_error', 'Claude Code ended without a request to the model' . $said);
     }
 
     /** @param Future<mixed> $stderr */

@@ -93,8 +93,10 @@ if (in_array('-p', $args, true)) {
     }
     $emit(['type' => 'system', 'subtype' => 'init', 'session_id' => $option('--session-id')]);
     if ($mode === 'garbage') {
+        // a wrapper around the CLI that prints its own line and gives up
         echo "Welcome to a shell that prints a banner\n";
         flush();
+        exit(0);
     }
     if ($mode === 'silent') {
         sleep(60);
