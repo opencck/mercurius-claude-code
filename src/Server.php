@@ -118,7 +118,15 @@ final class Server {
             $answer = $this->calls->run($call, $token, $gone->getCancellation());
             $headers = $answer->requestId === null ? [] : ['request-id' => $answer->requestId];
             if ($call->stream) {
-                return new Response(HttpStatus::OK, ['content-type' => 'text/event-stream', 'cache-control' => 'no-cache', ...$headers], new ReadableIterableStream($answer->stream()));
+                // the source of the cancellation lives as long as the stream: destroyed, it would cancel the call
+                $events = (static function () use ($answer, $gone): \Generator {
+                    try {
+                        yield from $answer->stream();
+                    } finally {
+                        unset($gone);
+                    }
+                })();
+                return new Response(HttpStatus::OK, ['content-type' => 'text/event-stream', 'cache-control' => 'no-cache', ...$headers], new ReadableIterableStream($events));
             }
             return new Response(HttpStatus::OK, ['content-type' => 'application/json', ...$headers], json_encode($answer->message(), MessagesRequest::JSON));
         } catch (CallFailed $e) {
