@@ -8,7 +8,7 @@ declare(strict_types=1);
  * CLAUDE_CODE_HOST (0.0.0.0), CLAUDE_CODE_COMMAND (claude), CLAUDE_CONFIG_DIR (/data/claude — where the CLI keeps its
  * sign-in), CLAUDE_CODE_MIN_VERSION (2.1.321), CLAUDE_CODE_IDLE_SECONDS (300 — how long a call may be silent),
  * CLAUDE_CODE_MAX_CONCURRENT (4 — how many processes of the CLI run at once; a call waits for a place).
- * The way out: VLESS_URI, else CLAUDE_CODE_PROXY (socks5h://, http://), else directly — for the request to the API
+ * The way out: directly when CLAUDE_CODE_PROXY is the word direct; else VLESS_URI, else CLAUDE_CODE_PROXY (socks5h://, http://), else directly — for the request to the API
  * and for everything the CLI sends by itself.
  */
 
@@ -57,7 +57,8 @@ if (!is_dir($configDir) || !is_writable($configDir)) {
 $logger = new NullLogger();
 // one route for both legs: the relay's request to the API and what the CLI sends by itself
 $routes = ['vless' => trim((string) getenv('VLESS_URI')), 'proxy' => trim((string) getenv('CLAUDE_CODE_PROXY'))];
-$routeName = $routes['vless'] !== '' ? 'vless' : ($routes['proxy'] !== '' ? 'proxy' : 'direct');
+// the word direct in CLAUDE_CODE_PROXY keeps the service off every route, the VLESS of the installation too
+$routeName = strtolower($routes['proxy']) === 'direct' ? 'direct' : ($routes['vless'] !== '' ? 'vless' : ($routes['proxy'] !== '' ? 'proxy' : 'direct'));
 $route = null;
 $egress = null;
 if ($routeName !== 'direct') {

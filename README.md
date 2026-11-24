@@ -85,7 +85,7 @@ per sign-in.
 | `CLAUDE_CODE_MIN_VERSION` | `2.1.321` | the oldest CLI the service works with |
 | `CLAUDE_CODE_IDLE_SECONDS` | `300` | how long the CLI may be silent in a call, and how long a call waits for a place |
 | `VLESS_URI` | — | the way out through VLESS: for the request to the API and for everything the CLI sends by itself |
-| `CLAUDE_CODE_PROXY` | — | the way out through a proxy (`socks5h://user:pass@host:1080`, `http://host:3128`) when `VLESS_URI` is empty; both empty — directly |
+| `CLAUDE_CODE_PROXY` | — | the way out through a proxy (`socks5h://user:pass@host:1080`, `http://host:3128`) when `VLESS_URI` is empty; both empty — directly. The word `direct` — directly even with `VLESS_URI` set |
 | `CLAUDE_CODE_MAX_CONCURRENT` | `4` | how many processes of the CLI run at once (about 250 MB each); other calls wait in order |
 
 With a route the service starts its own proxy on the loopback and gives it to the CLI as `HTTPS_PROXY`. That proxy

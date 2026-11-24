@@ -77,7 +77,7 @@ CLI 的事件得知状态；没有状态时向 CLI 询问一次（不调用模�
 | `CLAUDE_CODE_MIN_VERSION` | `2.1.321` | 服务可用的最低 CLI 版本 |
 | `CLAUDE_CODE_IDLE_SECONDS` | `300` | 一次调用中 CLI 可以沉默多久，以及调用等待空位多久 |
 | `VLESS_URI` | — | 经 VLESS 出站：用于发往 API 的请求以及 CLI 自己发出的一切 |
-| `CLAUDE_CODE_PROXY` | — | `VLESS_URI` 为空时经代理出站（`socks5h://user:pass@host:1080`、`http://host:3128`）；两者都为空则直连 |
+| `CLAUDE_CODE_PROXY` | — | `VLESS_URI` 为空时经代理出站（`socks5h://user:pass@host:1080`、`http://host:3128`）；两者都为空则直连。填 `direct` 则即使设置了 `VLESS_URI` 也直连 |
 | `CLAUDE_CODE_MAX_CONCURRENT` | `4` | 同时运行多少个 CLI 进程（每个约 250 MB）；其余调用按顺序等待 |
 
 有路由时，服务会在 loopback 上启动自己的代理，并以 `HTTPS_PROXY` 交给 CLI。该代理只接受 `CONNECT`，且只通往 Anthropic 的主机
