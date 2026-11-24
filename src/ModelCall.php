@@ -91,6 +91,8 @@ final class ModelCall {
      * @throws CancelledException
      */
     public function run(MessagesRequest $request, #[\SensitiveParameter] ?string $oauthToken, Cancellation $cancellation, string $policy = Limits::STOP, float $reserve = 100.0): Answer {
+        // the application went away while the request was read: nothing starts for it
+        $cancellation->throwIfRequested();
         try {
             $this->take(new CompositeCancellation($cancellation, new TimeoutCancellation($this->queueSeconds)));
         } catch (CancelledException $e) {
@@ -107,6 +109,7 @@ final class ModelCall {
             }
         };
         try {
+            $cancellation->throwIfRequested();
             // after the wait for a place: calls that ran meanwhile may have crossed the limit
             $this->limits->admit($oauthToken, $policy, $reserve);
             $observe = function (array $event) use ($oauthToken, $policy, $reserve): ?array {

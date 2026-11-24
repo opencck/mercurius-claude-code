@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Mercurius\ClaudeCode;
 
+use Amp\DeferredFuture;
+use Amp\Future;
 use Closure;
 use DateTimeImmutable;
 use SensitiveParameter;
@@ -38,6 +40,8 @@ final class Limits {
     private array $state = [];
     /** @var Closure(): float */
     private readonly Closure $clock;
+    /** @var array<string, Future<array{?array<array-key, mixed>, string}>> the questions to the CLI under way */
+    private array $asking = [];
 
     /**
      * @param Closure(?string): array{?array<array-key, mixed>, string} $probe asks the CLI for the usage of the plan
@@ -83,11 +87,7 @@ final class Limits {
         if ($known === null || $now >= $known['until']) {
             // an old answer must not outlive a probe that could not tell
             unset($this->state[$key]);
-            try {
-                [$limits, $reason] = ($this->probe)($oauthToken);
-            } catch (Throwable) {
-                [$limits, $reason] = [null, 'Claude Code gave no usage answer'];
-            }
+            [$limits, $reason] = $this->ask($key, $oauthToken);
             if ($limits === null) {
                 throw self::refused('The state of the plan limits is unknown (' . $reason . '), and paid use beyond the plan is not allowed, so the request was not sent.', null, $now);
             }
@@ -168,6 +168,33 @@ final class Limits {
         $times = array_filter($full, static fn(?float $time): bool => $time !== null);
         $resetsAt = $times === [] ? null : max($times);
         return $this->record($key, is_array($extra) && ($extra['is_enabled'] ?? false) === true && $full !== [], $resetsAt);
+    }
+
+    /**
+     * One question to the CLI per sign-in at a time: calls that wait for it share its answer instead of starting a
+     * process each.
+     *
+     * @return array{?array<array-key, mixed>, string}
+     */
+    private function ask(string $key, #[SensitiveParameter] ?string $oauthToken): array {
+        $asking = $this->asking[$key] ?? null;
+        if ($asking !== null) {
+            return $asking->await();
+        }
+        /** @var DeferredFuture<array{?array<array-key, mixed>, string}> $deferred */
+        $deferred = new DeferredFuture();
+        $this->asking[$key] = $deferred->getFuture();
+        try {
+            try {
+                $answer = ($this->probe)($oauthToken);
+            } catch (Throwable) {
+                $answer = [null, 'Claude Code gave no usage answer'];
+            }
+            $deferred->complete($answer);
+            return $answer;
+        } finally {
+            unset($this->asking[$key]);
+        }
     }
 
     /** @return ?array{using: bool, resetsAt: ?float, until: float} the state that still stands */

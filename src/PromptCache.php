@@ -68,20 +68,21 @@ final class PromptCache {
         $steps[] = static fn(stdClass $b): bool => self::pinMessageBreakpoint($b, $queried);
         foreach ($steps as $step) {
             // each step works on a copy: a step that fails halfway leaves nothing of itself
-            $copy = self::copy($body);
-            if (!$copy instanceof stdClass) {
-                continue;
-            }
             try {
-                if ($step($copy)) {
+                $copy = self::copy($body);
+                if ($copy instanceof stdClass && $step($copy)) {
                     $body = $copy;
                     $changed = true;
                 }
-            } catch (Mismatch | RuntimeException | \TypeError | \ValueError) {
+            } catch (Throwable) {
                 continue;
             }
         }
-        return $changed ? json_encode($body, MessagesRequest::JSON) : $payload;
+        try {
+            return $changed ? json_encode($body, MessagesRequest::JSON) : $payload;
+        } catch (Throwable) {
+            return $payload;
+        }
     }
 
     /** Message marks of a request nothing will repeat; marks of the system and the tools stay. */
