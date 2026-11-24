@@ -37,6 +37,12 @@ final class Admission {
     public array $headers = [];
     /** the kind of a failure between the relay and the API, when there was one */
     public ?string $failure = null;
+    /** @var list<\stdClass> the reply of the application the CLI was asked about: the cache keeps it as it was */
+    public array $queried = [];
+    /** nothing will repeat the messages of this call: they carry no cache marks */
+    public bool $oneShot = false;
+    /** why the tool results were not restored for the cache, when they were not */
+    public ?string $unrestored = null;
     /** the answer ended before it was complete: said after the events that did come, never instead of them */
     public ?CallFailed $cut = null;
     private string $errorBody = '';

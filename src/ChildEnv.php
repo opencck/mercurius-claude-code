@@ -120,11 +120,17 @@ final class ChildEnv {
      *      switches of a call; the limit of the answer goes by the CLI's own variable (L1054-L1058)
      *
      * @param string $relay the address of the relay with the route of this call
+     * @param ?string $cacheTtl how long the CLI asks the cache to keep this call (5m, 1h); null — its default
+     * ref: references/hermes-official-plugins/claude-subscription-directsdk/directsdk.py@269ddcb:L1035-L1038 — a
+     *      one-shot child gets the cache of five minutes
      * @return array<string, string>
      * @throws RefusedEnvironment
      */
-    public function call(#[SensitiveParameter] ?string $oauthToken, string $relay, ?int $maxTokens): array {
+    public function call(#[SensitiveParameter] ?string $oauthToken, string $relay, ?int $maxTokens, ?string $cacheTtl = null): array {
         $extra = ['ANTHROPIC_BASE_URL' => $relay];
+        if ($cacheTtl !== null) {
+            $extra['CLAUDE_CODE_PROMPT_CACHE_TTL'] = $cacheTtl;
+        }
         if ($maxTokens !== null) {
             $extra['CLAUDE_CODE_MAX_OUTPUT_TOKENS'] = (string) $maxTokens;
         }

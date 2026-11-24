@@ -127,6 +127,8 @@ final class Relay {
         }
         try {
             $payload = $request->getBody()->buffer($admission->cancellation(), self::MAX_BODY);
+            // spec: brief/models.md#claude-по-подписке — the prefix the next request repeats keeps its cache
+            $payload = PromptCache::shape($payload, $admission->queried, $admission->oneShot, $admission->unrestored);
             $query = $request->getUri()->getQuery();
             $outgoing = new ClientRequest($this->upstream . '/v1/messages' . ($query === '' ? '' : '?' . $query), 'POST', $payload);
             foreach ($request->getHeaders() as $name => $values) {

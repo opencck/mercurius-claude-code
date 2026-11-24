@@ -158,6 +158,8 @@ final class ModelCall {
      */
     private function start(MessagesRequest $request, #[\SensitiveParameter] ?string $oauthToken, Cancellation $cancellation, \Closure $free, \Closure $observe): Answer {
         $admission = new Admission($request->names);
+        $admission->queried = self::plainObjects($request->frames[count($request->frames) - 1]['message']['content']);
+        $admission->oneShot = $request->manifest === [] && count($request->frames) === 1;
         $relay = $this->relay->admit($admission);
         $dir = $this->tmpDir . '/claude-code-' . bin2hex(random_bytes(8));
         try {
@@ -193,7 +195,8 @@ final class ModelCall {
                 $command = [...$command, '--effort', $request->effort];
             }
             $command = [...$command, '--session-id', $request->sessionId()];
-            $process = Process::start($command, $this->workDir, $this->cli->env()->call($oauthToken, $relay, $request->maxTokens));
+            // a call nothing will repeat keeps its cache five minutes, not an hour: a long entry costs more to write
+            $process = Process::start($command, $this->workDir, $this->cli->env()->call($oauthToken, $relay, $request->maxTokens, $admission->oneShot ? '5m' : null));
         } catch (Throwable $e) {
             $this->relay->release($admission);
             $this->remove($dir);
@@ -348,6 +351,18 @@ final class ModelCall {
                 self::kill($process);
             }
         }
+    }
+
+    /**
+     * The blocks as plain JSON objects, the way the relay reads the request of the CLI.
+     *
+     * @param list<stdClass> $blocks
+     * @return list<stdClass>
+     */
+    private static function plainObjects(array $blocks): array {
+        /** @var mixed $copy */
+        $copy = json_decode(json_encode($blocks, MessagesRequest::JSON), false, 512, JSON_THROW_ON_ERROR);
+        return is_array($copy) ? array_values(array_filter($copy, static fn(mixed $b): bool => $b instanceof stdClass)) : [];
     }
 
     private static function failure(Admission $admission, Outcome $outcome, string $stderr): CallFailed {
