@@ -37,6 +37,8 @@ final class ClaudeCli {
         private readonly array $command,
         private readonly ChildEnv $env,
         private readonly string $minVersion,
+        /** how long a probe of the CLI may take */
+        private readonly float $probeSeconds = self::PROBE_SECONDS,
     ) {}
 
     /** @return non-empty-list<string> */
@@ -116,13 +118,16 @@ final class ClaudeCli {
     private function run(array $args, #[SensitiveParameter] ?string $oauthToken): array {
         $process = Process::start([...$this->command, ...$args], null, $this->env->build($oauthToken));
         $process->getStdin()->close();
-        $cancellation = new TimeoutCancellation(self::PROBE_SECONDS);
+        $cancellation = new TimeoutCancellation($this->probeSeconds);
+        $stderr = async(self::read(...), $process->getStderr(), $cancellation);
         try {
-            $stderr = async(self::read(...), $process->getStderr(), $cancellation);
             $out = self::read($process->getStdout(), $cancellation);
             $code = $process->join($cancellation);
             self::settle($stderr);
         } catch (CancelledException $e) {
+            // the read of stderr is cancelled by the same timeout: left unawaited, its error ended the event loop
+            // and the whole service with it
+            $stderr->ignore();
             $process->kill();
             throw $e;
         }

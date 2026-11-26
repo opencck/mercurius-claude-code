@@ -95,6 +95,19 @@ final class ServiceTest extends AsyncTestCase {
         return $data;
     }
 
+    /** A status probe that times out ends the probe, not the service: no future of it is left unawaited. */
+    public function testAStatusProbeThatTimesOutLeavesTheServiceStanding(): void {
+        touch($this->dir . '/hang');
+        $cli = new ClaudeCli([PHP_BINARY, __DIR__ . '/fixtures/fake-claude.php'], new ChildEnv(self::base(), $this->dir), '2.1.321', 0.5);
+
+        $status = $cli->status(null);
+        gc_collect_cycles();
+        \Amp\delay(0.2);
+
+        self::assertStringContainsString('did not answer', $status->detail);
+        self::assertSame('2.1.330', $cli->version(), 'the service still answers after it');
+    }
+
     public function testHealthIsOpenAndSaysTheCliWorksAndNobodyIsSignedIn(): void {
         $response = $this->server()->respond($this->request('GET', '/health', '', null));
 

@@ -27,6 +27,10 @@ if ($args === ['--version']) {
     exit(0);
 }
 if ($args === ['auth', 'status']) {
+    // a CLI that does not answer in time: a test sets the file
+    if (is_file($dir . '/hang')) {
+        sleep(5);
+    }
     $method = 'none';
     if (getenv('ANTHROPIC_API_KEY') !== false) {
         $method = 'api_key';

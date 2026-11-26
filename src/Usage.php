@@ -56,9 +56,10 @@ final class Usage {
             $stdin->write(json_encode(['type' => 'control_request', 'request_id' => self::REQUEST_ID, 'request' => ['subtype' => 'get_usage', 'skip_behaviors' => true]], JSON_THROW_ON_ERROR) . "\n");
             $stdin->end();
             $wait = new TimeoutCancellation(self::SECONDS);
-            $stderr = async(static fn(): string => buffer($process->getStderr(), $wait));
+            // stderr is not needed; ignored at once, so a timeout that ends the read of stdout does not leave it
+            // unawaited — an unawaited failed future ends the event loop and the service
+            async(static fn(): string => buffer($process->getStderr(), $wait))->ignore();
             $out = buffer($process->getStdout(), $wait);
-            $stderr->ignore();
         } catch (RefusedEnvironment $e) {
             return [null, $e->getMessage()];
         } catch (Throwable) {
